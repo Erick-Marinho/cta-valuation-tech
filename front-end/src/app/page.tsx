@@ -1,10 +1,13 @@
-import { Button } from '@/components/ui/button';
+import { NavigationMenuDemo } from '@/components/NavigationMenu';
+import { ModeToggle } from '@/components/ui/ModeToogle';
 
 export default function Home() {
 	return (
-		<div>
-			<h1 className='text-3xl font-bold underline'>Home</h1>
-			<Button>Shadcn aqui</Button>
+		<div className='flex justify-center items-start mt-[60px] h-screen'>
+			<div className='flex'>
+				<NavigationMenuDemo />
+				<ModeToggle />
+			</div>
 		</div>
 	);
 }
