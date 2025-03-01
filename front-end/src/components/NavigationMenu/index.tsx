@@ -56,10 +56,12 @@ const components: { title: string; href: string; description: string }[] = [
 export function NavigationMenuDemo() {
 	return (
 		<NavigationMenu>
-			<NavigationMenuList>
+			<NavigationMenuList className=''>
 				<NavigationMenuItem>
-					<NavigationMenuTrigger>Getting started</NavigationMenuTrigger>
-					<NavigationMenuContent>
+					<NavigationMenuTrigger className='text-sm font-normal'>
+						Avaliação
+					</NavigationMenuTrigger>
+					<NavigationMenuContent className=''>
 						<ul className='grid gap-3 p-4 md:w-[400px] lg:w-[500px] lg:grid-cols-[.75fr_1fr]'>
 							<li className='row-span-3'>
 								<NavigationMenuLink asChild>
@@ -91,7 +93,9 @@ export function NavigationMenuDemo() {
 					</NavigationMenuContent>
 				</NavigationMenuItem>
 				<NavigationMenuItem>
-					<NavigationMenuTrigger>Components</NavigationMenuTrigger>
+					<NavigationMenuTrigger className='text-sm font-normal'>
+						Sustentabilidade
+					</NavigationMenuTrigger>
 					<NavigationMenuContent>
 						<ul className='grid w-[400px] gap-3 p-4 md:w-[500px] md:grid-cols-2 lg:w-[600px] '>
 							{components.map((component) => (
@@ -108,8 +112,28 @@ export function NavigationMenuDemo() {
 				</NavigationMenuItem>
 				<NavigationMenuItem>
 					<Link href='/docs' legacyBehavior passHref>
-						<NavigationMenuLink className={navigationMenuTriggerStyle()}>
-							Documentation
+						<NavigationMenuLink
+							className={navigationMenuTriggerStyle() + ' text-sm font-normal'}
+						>
+							Sobre
+						</NavigationMenuLink>
+					</Link>
+				</NavigationMenuItem>
+				<NavigationMenuItem>
+					<Link href='/docs' legacyBehavior passHref>
+						<NavigationMenuLink
+							className={navigationMenuTriggerStyle() + ' text-sm font-normal'}
+						>
+							Legislação
+						</NavigationMenuLink>
+					</Link>
+				</NavigationMenuItem>
+				<NavigationMenuItem>
+					<Link href='/docs' legacyBehavior passHref>
+						<NavigationMenuLink
+							className={navigationMenuTriggerStyle() + ' text-sm font-normal'}
+						>
+							Blog
 						</NavigationMenuLink>
 					</Link>
 				</NavigationMenuItem>

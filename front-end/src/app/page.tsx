@@ -1,13 +1,13 @@
-import { NavigationMenuDemo } from '@/components/NavigationMenu';
-import { ModeToggle } from '@/components/ui/ModeToogle';
+import Header from '@/components/Header';
+import HeroSection from '@/components/HeroSection';
+import OverviewSection from '@/components/OverviewSection';
 
 export default function Home() {
 	return (
-		<div className='flex justify-center items-start mt-[60px] h-screen'>
-			<div className='flex'>
-				<NavigationMenuDemo />
-				<ModeToggle />
-			</div>
+		<div className='relative'>
+			<Header />
+			<HeroSection />
+			<OverviewSection />
 		</div>
 	);
 }
