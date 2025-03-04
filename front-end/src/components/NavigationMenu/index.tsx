@@ -113,7 +113,10 @@ export function NavigationMenuDemo() {
 				<NavigationMenuItem>
 					<Link href='/docs' legacyBehavior passHref>
 						<NavigationMenuLink
-							className={navigationMenuTriggerStyle() + ' text-sm font-normal'}
+							className={
+								navigationMenuTriggerStyle() +
+								' text-sm font-normal bg-transparent'
+							}
 						>
 							Sobre
 						</NavigationMenuLink>
@@ -122,7 +125,10 @@ export function NavigationMenuDemo() {
 				<NavigationMenuItem>
 					<Link href='/docs' legacyBehavior passHref>
 						<NavigationMenuLink
-							className={navigationMenuTriggerStyle() + ' text-sm font-normal'}
+							className={
+								navigationMenuTriggerStyle() +
+								' text-sm font-normal bg-transparent'
+							}
 						>
 							Legislação
 						</NavigationMenuLink>
@@ -131,7 +137,10 @@ export function NavigationMenuDemo() {
 				<NavigationMenuItem>
 					<Link href='/docs' legacyBehavior passHref>
 						<NavigationMenuLink
-							className={navigationMenuTriggerStyle() + ' text-sm font-normal'}
+							className={
+								navigationMenuTriggerStyle() +
+								' text-sm font-normal bg-transparent'
+							}
 						>
 							Blog
 						</NavigationMenuLink>

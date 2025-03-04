@@ -147,13 +147,13 @@
 	width: 100%;
 	background-color: #222228; /* fallback */
 	background: linear-gradient(
-			to bottom,
-			#222228 0%,
-			/* Cor sólida igual à do botão no topo */ #222228 5%,
-			/* Manter sólido por um pequeno trecho */ rgba(34, 34, 40, 0.8) 25%,
-			/* Começa a ficar mais transparente */ rgba(34, 34, 40, 0.3) 100%
-		),
-		/* Bastante transparente no final */ url('/carrousel01.jpg') center center;
+		to bottom,
+		#222228 0%,
+		/* Cor sólida igual à do botão no topo */ #222228 5%,
+		/* Manter sólido por um pequeno trecho */ rgba(34, 34, 40, 0.8) 25%,
+		/* Começa a ficar mais transparente */ rgba(34, 34, 40, 0.3) 100%
+	);
+
 	background-size: 100% auto;
 	background-repeat: no-repeat;
 	color: #fff;
@@ -167,4 +167,28 @@
 	/* Ajuste a altura para corresponder melhor à proporção da sua imagem */
 	height: auto; /* ou uma altura que corresponda à proporção da sua imagem */
 	min-height: 590px;
+}
+
+.custom-citacoes {
+	position: relative;
+	font-size: 13px;
+	color: #909090;
+	font-family: 'Lexend', sans-serif;
+	font-weight: 400;
+	font-style: italic;
+	padding: 20px;
+	width: 100%;
+	border: 2px solid #e5e5e5;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	line-height: 20px;
+	border-radius: 10px;
+	border-bottom-right-radius: 0px;
+	height: 100%;
+	text-align: center;
+}
+
+.video-container {
+	width: calc(((100% / 12)) * 8 - (8 * 16px));
 }

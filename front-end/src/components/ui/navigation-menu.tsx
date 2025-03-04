@@ -39,7 +39,7 @@ function NavigationMenuList({
 		<NavigationMenuPrimitive.List
 			data-slot='navigation-menu-list'
 			className={cn(
-				'group flex flex-1 list-none items-center justify-center gap-10',
+				'group flex flex-1 list-none items-center justify-center gap-10 ',
 				className,
 			)}
 			{...props}
@@ -54,7 +54,7 @@ function NavigationMenuItem({
 	return (
 		<NavigationMenuPrimitive.Item
 			data-slot='navigation-menu-item'
-			className={cn('relative ml-2 mr-2', className)}
+			className={cn('relative ml-2 mr-2 ', className)}
 			{...props}
 		/>
 	);
@@ -72,7 +72,12 @@ function NavigationMenuTrigger({
 	return (
 		<NavigationMenuPrimitive.Trigger
 			data-slot='navigation-menu-trigger'
-			className={cn(navigationMenuTriggerStyle(), 'group', className)}
+			className={cn(
+				navigationMenuTriggerStyle(),
+				'group',
+				className,
+				'bg-transparent',
+			)}
 			{...props}
 		>
 			{children}{' '}
