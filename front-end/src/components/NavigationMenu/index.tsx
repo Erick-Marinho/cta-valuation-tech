@@ -55,10 +55,10 @@ const components: { title: string; href: string; description: string }[] = [
 
 export function NavigationMenuDemo() {
 	return (
-		<NavigationMenu>
+		<NavigationMenu className='flex w-full p-0 m-0 justify-between flex-nowrap '>
 			<NavigationMenuList className=''>
 				<NavigationMenuItem>
-					<NavigationMenuTrigger className='text-sm font-normal'>
+					<NavigationMenuTrigger className='text-sm font-normal  hover:bg-accent/60'>
 						Avaliação
 					</NavigationMenuTrigger>
 					<NavigationMenuContent className=''>
@@ -93,7 +93,7 @@ export function NavigationMenuDemo() {
 					</NavigationMenuContent>
 				</NavigationMenuItem>
 				<NavigationMenuItem>
-					<NavigationMenuTrigger className='text-sm font-normal'>
+					<NavigationMenuTrigger className='text-sm font-normal  hover:bg-accent/60'>
 						Sustentabilidade
 					</NavigationMenuTrigger>
 					<NavigationMenuContent>
@@ -115,7 +115,7 @@ export function NavigationMenuDemo() {
 						<NavigationMenuLink
 							className={
 								navigationMenuTriggerStyle() +
-								' text-sm font-normal bg-transparent'
+								' text-sm font-normal bg-transparent hover:bg-accent/60'
 							}
 						>
 							Sobre
@@ -127,7 +127,7 @@ export function NavigationMenuDemo() {
 						<NavigationMenuLink
 							className={
 								navigationMenuTriggerStyle() +
-								' text-sm font-normal bg-transparent'
+								' text-sm font-normal bg-transparent  hover:bg-accent/60'
 							}
 						>
 							Legislação
@@ -139,7 +139,7 @@ export function NavigationMenuDemo() {
 						<NavigationMenuLink
 							className={
 								navigationMenuTriggerStyle() +
-								' text-sm font-normal bg-transparent'
+								' text-sm font-normal bg-transparent  hover:bg-accent/60'
 							}
 						>
 							Blog

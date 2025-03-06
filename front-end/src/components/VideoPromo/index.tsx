@@ -3,7 +3,7 @@ import VideoContainer from './VideoContainer';
 
 export default function VideoPromo() {
 	return (
-		<section className='bg-[#222228] flex flex-col justify-center items-center py-16 md:py-24'>
+		<section className='block bg-[#222228] text-[#fff] pt-[120px] pb-[120px] pr-0'>
 			<VideoContainer />
 			<LogoCards />
 		</section>

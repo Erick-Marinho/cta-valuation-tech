@@ -1,6 +1,6 @@
 export default function Quotes() {
 	return (
-		<div className='max-w-[1344px] mx-auto bg-amber-50'>
+		<div className='max-w-[1344px] mx-auto bg-[#FFFCF5]'>
 			<div className='max-w-[1344px]  mx-auto'>
 				<div className='max-w-[1344px]  grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 py-12'>
 					<div className='custom-citacoes'>

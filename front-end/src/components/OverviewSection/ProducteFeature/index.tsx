@@ -9,9 +9,9 @@ export default function ProducteFeature() {
 	const [selectedTab, setSelectedTab] = useState('diagnosticoSustentavel');
 
 	const backgroundImages = {
-		diagnosticoSustentavel: 'carrousel07.jpg',
+		diagnosticoSustentavel: 'carrousel01.jpg',
 		calculoRoyalties: 'carrousel02.jpg',
-		gestaoEsg: 'carrousel03.jpg',
+		gestaoEsg: 'teste01.jpg',
 		parceriasComerciais: 'carrousel04.jpg',
 		impactoSocioambiental: 'carrousel05.jpg',
 		reparticaobeneficios: 'carrousel06.jpg',

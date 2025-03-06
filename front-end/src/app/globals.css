@@ -41,7 +41,7 @@
 }
 
 .dark {
-	--background: oklch(0.145 0 0);
+	--background: oklch(0.15 0.018 295.4);
 	--foreground: oklch(0.985 0 0);
 	--card: oklch(0.145 0 0);
 	--card-foreground: oklch(0.985 0 0);
@@ -114,6 +114,14 @@
 	--color-sidebar-ring: var(--sidebar-ring);
 }
 
+@keyframes navItemFade {
+	0% {
+		opacity: 0;
+	}
+	100% {
+		opacity: 1;
+	}
+}
 @keyframes fadeRight {
 	0% {
 		transform: translateX(100%);
@@ -139,8 +147,17 @@
 		@apply border-border outline-ring/50;
 	}
 	body {
-		@apply bg-background text-foreground;
+		@apply bg-background text-foreground font-[lexend] leading-[22px] font-normal m-0 p-0;
 	}
+}
+
+.animate-navItemFade {
+	animation-name: navItemFade;
+	animation-duration: 1s;
+	animation-iteration-count: 1;
+	animation-fill-mode: forwards;
+	animation-delay: 1.2s;
+	opacity: 0;
 }
 
 .custom-card-bg {

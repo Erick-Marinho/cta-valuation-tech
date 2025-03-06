@@ -2,8 +2,8 @@ import Image from 'next/image';
 
 export default function LogoCards() {
 	return (
-		<div className='container mx-auto px-4 mt-16'>
-			<div className='grid grid-cols-1 md:grid-cols-4 gap-5'>
+		<div className='block relative w-[1344px] max-w-[1344px] m-auto'>
+			<div className='grid grid-cols-1 md:grid-cols-4 gap-5 pt-[60px]'>
 				{/* Primeiro card */}
 				<div className='flex justify-center items-center h-[160px] bg-[#27272c] rounded-lg'>
 					<Image

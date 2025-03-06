@@ -106,21 +106,61 @@ export default function PromoService() {
 			buttonText: 'Desenvolvimento Comunitário',
 		},
 	];
+
 	return (
-		<div className='relative py-[120px] pb-[240px] px-0'>
+		<div
+			className='relative py-[120px] pb-[240px] px-0 overflow-hidden'
+			style={{
+				background:
+					"linear-gradient(rgba(0,0,0,0.85), rgba(0,0,0,0.95)), url('/futuro-sustentavel.jpg')",
+				backgroundSize: 'cover',
+				backgroundPosition: 'center',
+				backgroundAttachment: 'fixed',
+			}}
+		>
+			{/* Triângulo decorativo superior esquerdo (amarelo/âmbar) */}
+			<div
+				className='absolute top-0 left-0'
+				style={{
+					width: 0,
+					height: 0,
+					borderStyle: 'solid',
+					borderWidth: '100px 100px 0 0',
+					borderColor:
+						'rgba(245, 158, 11, 0.7) transparent transparent transparent',
+					transform: 'rotate(0deg)',
+				}}
+			></div>
+
+			{/* Triângulo decorativo inferior direito (verde) */}
+			<div
+				className='absolute bottom-0 right-0'
+				style={{
+					width: 0,
+					height: 0,
+					borderStyle: 'solid',
+					borderWidth: '0 0 100px 100px',
+					borderColor:
+						'transparent transparent rgba(16, 185, 129, 0.7) transparent',
+					transform: 'rotate(0deg)',
+				}}
+			></div>
+
 			<div className='container relative flex flex-col justify-center items-center w-[1344px] max-w-[1344px] m-auto'>
 				<div className='block text-center'>
-					<h2 className='block font-normal text-[28px] pt-0 px-[30px] pb-[120px] leading-9 m-0 font-[lexend] [margin-block-start:0.83em] [margin-block-end:0.83em] [margin-inline-start:0px] [margin-inline-end:0px] text-center'>
+					<h2 className='block font-normal text-[28px] pt-0 px-[30px] pb-[120px] leading-9 m-0 font-[lexend] [margin-block-start:0.83em] [margin-block-end:0.83em] [margin-inline-start:0px] [margin-inline-end:0px] text-center text-white relative inline-block'>
 						Aqui está uma pequena seleção de nossos serviços
+						<span className='absolute bottom-[110px] left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-[#10b981] to-transparent'></span>
 					</h2>
-					<div className='flex justify-between text-center'>
-						{services.map((service) => (
+					<div className='flex justify-between text-center gap-4'>
+						{services.map((service, index) => (
 							<CardService
 								key={service.id}
 								icon={service.icon}
 								title={service.title}
 								description={service.description}
 								buttonText={service.buttonText}
+								index={index}
 							/>
 						))}
 					</div>

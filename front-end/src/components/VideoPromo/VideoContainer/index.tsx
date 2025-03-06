@@ -1,7 +1,7 @@
 export default function VideoContainer() {
 	return (
-		<div className='container relative flex flex-col md:flex-row justify-between m-auto gap-8 pt-8 '>
-			<div className='video-container w-full md:w-2/3 relative'>
+		<div className='w-[1344px] max-w-[1344px] flex justify-between m-auto '>
+			<div className='video-container w-[calc((100%/12)*8-(8*16px))]'>
 				<div className='relative pt-[56.25%]'>
 					<iframe
 						className='absolute top-0 left-0 w-full h-full border-0 rounded-lg'
@@ -14,7 +14,7 @@ export default function VideoContainer() {
 					</iframe>
 				</div>
 			</div>
-			<div className='flex flex-col w-full md:w-1/3 justify-center items-start p-4 md:p-8'>
+			<div className='flex flex-col max-w-[436px] justify-center items-start px-[30px] py-0'>
 				<h2 className='font-normal text-[28px] leading-9 pb-8 text-[#FFF] font-[lexend]'>
 					Valorize tecnologias com acesso ao Patrimônio Genético Nacional e
 					Conhecimentos Tradicionais
