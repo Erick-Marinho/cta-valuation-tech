@@ -1,11 +1,11 @@
 services:
   frontend:
-    build: ./front-end
+    build: ./frontend
     container_name: frontend_app
     ports:
       - '3000:3000'
     volumes:
-      - ./front-end:/app
+      - ./frontend:/app
       # - node_modules:/app/node_modules
     environment:
       - NODE_ENV=development
