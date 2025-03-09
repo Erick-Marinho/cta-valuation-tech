@@ -1,0 +1,10 @@
+python-dotenv
+PyPDF2
+langchain_text_splitters
+tiktoken
+qdrant-client
+langchain_huggingface
+langchain_qdrant
+openai
+fastapi
+uvicorn
