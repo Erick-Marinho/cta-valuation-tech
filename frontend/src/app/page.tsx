@@ -1,3 +1,4 @@
+import ChatButton from '@/components/ChatButton';
 import Footer from '@/components/Footer';
 import Header from '@/components/Header';
 import HeroSection from '@/components/HeroSection';
@@ -14,6 +15,7 @@ export default function Home() {
 			<VideoPromo />
 			<PromoSection />
 			<Footer />
+			<ChatButton />
 		</div>
 	);
 }
