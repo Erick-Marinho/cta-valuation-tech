@@ -1,13 +1,72 @@
-import PyPDF2
 import os
+import PyPDF2
+import dotenv
 from os import listdir
 from os.path import isfile, join, isdir
-from qdrant_client import QdrantClient
+import psycopg2
+from psycopg2.extras import Json, DictCursor
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
-from qdrant_client.models import Distance, VectorParams
-from langchain_qdrant import QdrantVectorStore
 
+dotenv.load_dotenv()
+
+# Configuração do modelo de embeddings
+model_name = "intfloat/multilingual-e5-large-instruct"
+model_kwargs = {"device": "cuda"}
+encode_kwargs = {"normalize_embeddings": True}
+hf = HuggingFaceEmbeddings(model_name=model_name, model_kwargs=model_kwargs, encode_kwargs=encode_kwargs)
+
+# Conexão com o PostgreSQL
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5433/vectordb")
+
+def conectar_bd():
+    """Estabelece conexão com o banco de dados PostgreSQL."""
+    conn = psycopg2.connect(DATABASE_URL)
+    conn.autocommit = True
+    return conn
+
+def criar_tabelas():
+    """Cria as tabelas necessárias no PostgreSQL se não existirem."""
+    conn = conectar_bd()
+    cursor = conn.cursor()
+    
+    # Criar extensão pgvector
+    cursor.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+    
+    # Tabela para documentos originais
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS documentos_originais (
+        id SERIAL PRIMARY KEY,
+        nome_arquivo TEXT NOT NULL,
+        tipo_arquivo TEXT NOT NULL,
+        conteudo_binario BYTEA NOT NULL,
+        data_upload TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        metadados JSONB
+    );
+    """)
+    
+    # Tabela para chunks vetorizados
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS chunks_vetorizados (
+        id SERIAL PRIMARY KEY,
+        documento_id INTEGER REFERENCES documentos_originais(id) ON DELETE CASCADE,
+        texto TEXT NOT NULL,
+        embedding vector(768),
+        pagina INTEGER,
+        posicao INTEGER,
+        metadados JSONB
+    );
+    """)
+    
+    # Criar índice para busca vetorial
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks_vetorizados 
+    USING ivfflat (embedding vector_cosine_ops);
+    """)
+    
+    cursor.close()
+    conn.close()
+    print("Tabelas criadas com sucesso!")
 
 def lista_arquivos(dir):
     """Listar todos os arquivos em um diretório e seus subdiretórios."""
@@ -19,156 +78,121 @@ def lista_arquivos(dir):
         elif isdir(join(dir, item)):
             arquivos_list += lista_arquivos(join(dir, item))
     return arquivos_list
+  
+def limpar_texto(texto):
+    """Limpa o texto para evitar problemas com caracteres especiais."""
+    if texto is None:
+        return ""
+    texto_limpo = texto.replace("\x00", "")
+    return texto_limpo
 
-def preparar_vectorstore(collection_name="teste"):
-    """Prepara e retorna o QdrantVectorStore."""
-    model_name = "intfloat/multilingual-e5-large-instruct"
-    model_kwargs = {"device": "cpu"}
-    encode_kwargs = {"normalize_embeddings": True}
-
-    hf = HuggingFaceEmbeddings(
-        model_name=model_name, 
-        model_kwargs=model_kwargs, 
-        encode_kwargs=encode_kwargs
-    ) 
-    
-    client = QdrantClient(url="http://localhost:6333")
-    
-    # Apagar e recriar a coleção apenas uma vez no início
-    if client.collection_exists(collection_name):
-        print(f"Apagando coleção existente: {collection_name}")
-        client.delete_collection(collection_name)
-    
-    print(f"Criando nova coleção: {collection_name}")
-    vector_params = VectorParams(
-        size=1024,  # Tamanho do vetor de embedding
-        distance=Distance.COSINE  # Métrica de distância
-    )
-    
-    client.recreate_collection(
-        collection_name=collection_name,
-        vectors_config=vector_params
-    )
-    
-    qdrant = QdrantVectorStore(
-        client,
-        collection_name,
-        hf
-    )
-    
-    return qdrant
-
-def processar_arquivo(arquivo, qdrant):
-    """Processa um único arquivo e retorna chunks e metadados."""
-    print(f"Processando arquivo: {arquivo}")
-    chunks = []
-    metadata = []
-    
+def processar_arquivo(arquivo_path):
+    """Processa um arquivo PDF e retorna seu conteúdo binário e chunks de texto."""
     try:
-        conteudo = ""
+        # Ler o arquivo binário
+        with open(arquivo_path, 'rb') as file:
+            conteudo_binario = file.read()
         
-        if arquivo.endswith(".pdf"):
-            print(f"Lendo arquivo PDF: {arquivo}")
-            try:
-                read = PyPDF2.PdfReader(arquivo)
-                for page in read.pages:
-                    texto_pagina = page.extract_text()
-                    if texto_pagina:  # Verifica se o texto não está vazio
-                        conteudo += " " + texto_pagina
-            except Exception as e:
-                print(f"Erro ao ler PDF {arquivo}: {e}")
-                return [], []
+        # Extrair texto do PDF
+        conteudo_texto = ""
+        if arquivo_path.endswith(".pdf"):
+            read = PyPDF2.PdfReader(arquivo_path)
+            for page in read.pages:
+                texto_pagina = page.extract_text()
+                if texto_pagina:
+                    texto_pagina = limpar_texto(texto_pagina)
+                    conteudo_texto += " " + texto_pagina
         
-        # Adicione aqui suporte para outros tipos de arquivo
-        # elif arquivo.endswith(".txt"):
-        #     with open(arquivo, 'r', encoding='utf-8') as f:
-        #         conteudo = f.read()
-        # elif arquivo.endswith(".docx"):
-        #     # Implemente a leitura de arquivos DOCX
-        
-        else:
-            print(f"Tipo de arquivo não suportado: {arquivo}")
-            return [], []
-        
-        if not conteudo.strip():  # Verifica se o conteúdo está vazio após processamento
-            print(f"Aviso: Conteúdo vazio extraído de {arquivo}")
-            return [], []
+        # Se não tiver conteúdo, retornar vazio
+        if not conteudo_texto.strip():
+            return conteudo_binario, [], []
         
         # Dividir texto em chunks
-        result_split = RecursiveCharacterTextSplitter(
+        splitter = RecursiveCharacterTextSplitter(
             chunk_size=800,
             chunk_overlap=100,
-            separators=["\n\n", "\n", ". ", " ", ""],
-            is_separator_regex=False
+            separators=["\n\n", "\n", ". ", " ", ""]
         )
         
-        chunks = result_split.split_text(conteudo)
-        if not chunks:
-            print(f"Aviso: Nenhum chunk gerado para {arquivo}")
-            return [], []
-            
-        print(f"Gerados {len(chunks)} chunks para {arquivo}")
-        metadata = [{"path": arquivo, "chunk_id": i} for i, _ in enumerate(chunks)]
+        chunks = splitter.split_text(conteudo_texto)
         
-    except Exception as e:
-        print(f"Erro ao processar arquivo {arquivo}: {e}")
-        return [], []
+        # Gerar embeddings para cada chunk
+        embeddings = []
+        for chunk in chunks:
+            embedding = hf.embed_query(chunk)
+            embeddings.append(embedding)
+        
+        return conteudo_binario, chunks, embeddings
     
-    return chunks, metadata
+    except Exception as e:
+        print(f"Erro ao processar arquivo {arquivo_path}: {e}")
+        return None, [], []
 
-def indexar_documentos(dir_documentos="documents", collection_name="teste", batch_size=100):
-    """Processa e indexa todos os documentos do diretório especificado."""
+def migrar_documentos(dir_documentos="documents"):
+    """Migra documentos da pasta para o PostgreSQL."""
+    criar_tabelas()
+    
     # Obter lista de arquivos
     arquivos = lista_arquivos(dir_documentos)
     print(f"Encontrados {len(arquivos)} arquivos em {dir_documentos}")
     
     if not arquivos:
-        print("Nenhum arquivo encontrado para processamento")
+        print("Nenhum arquivo encontrado para migração")
         return
     
-    # Preparar o vector store (apenas uma vez)
-    qdrant = preparar_vectorstore(collection_name)
-    print(f"Vector store configurado com o modelo de embeddings: {qdrant._embeddings}")
-    
-    # Processar arquivos em batch para melhor performance
-    todos_chunks = []
-    todos_metadata = []
-    arquivos_processados = 0
-    arquivos_com_erro = 0
-    total_chunks = 0
+    conn = conectar_bd()
     
     for arquivo in arquivos:
-        chunks, metadata = processar_arquivo(arquivo, qdrant)
-        
-        if chunks:  # Se tiver chunks válidos
-            todos_chunks.extend(chunks)
-            todos_metadata.extend(metadata)
-            total_chunks += len(chunks)
-            arquivos_processados += 1
+        try:
+            nome_arquivo = os.path.basename(arquivo)
+            tipo_arquivo = os.path.splitext(arquivo)[1][1:].lower()  # Obtém a extensão sem o ponto
             
-            # Indexar em batches para não sobrecarregar a memória
-            if len(todos_chunks) >= batch_size:
-                print(f"Indexando batch de {len(todos_chunks)} chunks...")
-                qdrant.add_texts(todos_chunks, metadatas=todos_metadata)
-                todos_chunks = []
-                todos_metadata = []
-        else:
-            arquivos_com_erro += 1
+            print(f"Processando: {nome_arquivo}")
+            
+            # Extrair conteúdo e processar
+            conteudo_binario, chunks, embeddings = processar_arquivo(arquivo)
+            if not conteudo_binario:
+                print(f"Pulando arquivo {nome_arquivo}: erro na extração")
+                continue
+            
+            # Inserir documento original
+            cursor = conn.cursor(cursor_factory=DictCursor)
+            cursor.execute(
+                """
+                INSERT INTO documentos_originais (nome_arquivo, tipo_arquivo, conteudo_binario, metadados)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id
+                """,
+                (nome_arquivo, tipo_arquivo, psycopg2.Binary(conteudo_binario), Json({"path": arquivo}))
+            )
+            
+            documento_id = cursor.fetchone()['id']
+            
+            # Inserir chunks
+            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+                chunk = limpar_texto(chunk)
+                
+                metadados = {
+                    "path": arquivo,
+                    "chunk_id": i
+                }
+                
+                cursor.execute(
+                    """
+                    INSERT INTO chunks_vetorizados 
+                    (documento_id, texto, embedding, pagina, posicao, metadados)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (documento_id, chunk, embedding, 1, i, Json(metadados))
+                )
+            
+            print(f"Documento {nome_arquivo} migrado com {len(chunks)} chunks")
+            
+        except Exception as e:
+            print(f"Erro ao migrar documento {arquivo}: {e}")
     
-    # Indexar os chunks restantes
-    if todos_chunks:
-        print(f"Indexando batch final de {len(todos_chunks)} chunks...")
-        qdrant.add_texts(todos_chunks, metadatas=todos_metadata)
-    
-    print("\n--- Resumo da Indexação ---")
-    print(f"Total de arquivos encontrados: {len(arquivos)}")
-    print(f"Arquivos processados com sucesso: {arquivos_processados}")
-    print(f"Arquivos com erro ou não suportados: {arquivos_com_erro}")
-    print(f"Total de chunks indexados: {total_chunks}")
-    print("Indexação concluída com sucesso!")
-    
-    return qdrant
+    conn.close()
+    print("Migração concluída!")
 
-# Execução principal
 if __name__ == "__main__":
-    indexar_documentos("documents")
+    migrar_documentos()
