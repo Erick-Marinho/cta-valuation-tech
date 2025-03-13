@@ -8,65 +8,18 @@ from psycopg2.extras import Json, DictCursor
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 
+from utils.createJSON import create_json_from_chunks
+
+from db.db import conectar_bd, criar_tabelas
+from services import getChunks
+
 dotenv.load_dotenv()
 
 # Configuração do modelo de embeddings
 model_name = "intfloat/multilingual-e5-large-instruct"
-model_kwargs = {"device": "cuda"}
+model_kwargs = {"device": "cpu"}
 encode_kwargs = {"normalize_embeddings": True}
 hf = HuggingFaceEmbeddings(model_name=model_name, model_kwargs=model_kwargs, encode_kwargs=encode_kwargs)
-
-# Conexão com o PostgreSQL
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5433/vectordb")
-
-def conectar_bd():
-    """Estabelece conexão com o banco de dados PostgreSQL."""
-    conn = psycopg2.connect(DATABASE_URL)
-    conn.autocommit = True
-    return conn
-
-def criar_tabelas():
-    """Cria as tabelas necessárias no PostgreSQL se não existirem."""
-    conn = conectar_bd()
-    cursor = conn.cursor()
-    
-    # Criar extensão pgvector
-    cursor.execute("CREATE EXTENSION IF NOT EXISTS vector;")
-    
-    # Tabela para documentos originais
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS documentos_originais (
-        id SERIAL PRIMARY KEY,
-        nome_arquivo TEXT NOT NULL,
-        tipo_arquivo TEXT NOT NULL,
-        conteudo_binario BYTEA NOT NULL,
-        data_upload TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        metadados JSONB
-    );
-    """)
-    
-    # Tabela para chunks vetorizados
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS chunks_vetorizados (
-        id SERIAL PRIMARY KEY,
-        documento_id INTEGER REFERENCES documentos_originais(id) ON DELETE CASCADE,
-        texto TEXT NOT NULL,
-        embedding vector(768),
-        pagina INTEGER,
-        posicao INTEGER,
-        metadados JSONB
-    );
-    """)
-    
-    # Criar índice para busca vetorial
-    cursor.execute("""
-    CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks_vetorizados 
-    USING ivfflat (embedding vector_cosine_ops);
-    """)
-    
-    cursor.close()
-    conn.close()
-    print("Tabelas criadas com sucesso!")
 
 def lista_arquivos(dir):
     """Listar todos os arquivos em um diretório e seus subdiretórios."""
@@ -107,18 +60,16 @@ def processar_arquivo(arquivo_path):
         if not conteudo_texto.strip():
             return conteudo_binario, [], []
         
-        # Dividir texto em chunks
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=800,
-            chunk_overlap=100,
-            separators=["\n\n", "\n", ". ", " ", ""]
-        )
+        # chunks = getChunks.getChunks(conteudo_texto)
+        chunks = getChunks.getChunksNLTK(conteudo_texto)
         
-        chunks = splitter.split_text(conteudo_texto)
-        
+
+        # create_json_from_chunks(chunks)
+       
         # Gerar embeddings para cada chunk
         embeddings = []
         for chunk in chunks:
+            print("blablabla")
             embedding = hf.embed_query(chunk)
             embeddings.append(embedding)
         
@@ -171,6 +122,7 @@ def migrar_documentos(dir_documentos="documents"):
             # Inserir chunks
             for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
                 chunk = limpar_texto(chunk)
+                print("chunk")
                 
                 metadados = {
                     "path": arquivo,

@@ -11,6 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 import io
 import PyPDF2
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from utils.createJSON import create_json_from_db
+from db import db
 
 dotenv.load_dotenv()
 
@@ -30,7 +32,7 @@ client_ai = OpenAI(
 )
 
 # Configuração da conexão com o banco de dados
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/vectordb")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgres://admin:-ABnTLnyH_2e~GBOYjI5v3Zgd3b.0~OL@caboose.proxy.rlwy.net:56050/cta-db")
 
 # Splitter de texto
 text_splitter = RecursiveCharacterTextSplitter(
@@ -150,6 +152,7 @@ async def chat(item: Item):
     Processa uma consulta do usuário usando RAG com o banco de dados vetorial.
     """
     query = item.query
+
     
     try:
         # Calcular embedding da consulta
@@ -177,6 +180,10 @@ async def chat(item: Item):
         )
         
         search_result = cursor.fetchall()
+
+        #Cria uma arquivo JSON para visualização dos dados
+        create_json_from_db(search_result)
+        
         
         # Preparar contexto para o LLM
         context = ""
@@ -296,5 +303,9 @@ async def listar_documentos():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao listar documentos: {str(e)}")
 
+@app.delete("/truncate/{nome_tabela}")
+def limpar_tabela_endpoint(nome_tabela: str):
+    return db.limpar_tabela(nome_tabela)
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8001")))
