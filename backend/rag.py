@@ -12,12 +12,12 @@ dotenv.load_dotenv()
 
 # Configuração do modelo de embeddings
 model_name = "intfloat/multilingual-e5-large-instruct"
-model_kwargs = {"device": "cuda"}
+model_kwargs = {"device": "cuda" if os.getenv("USE_GPU", "false").lower() == "true" else "cpu"}
 encode_kwargs = {"normalize_embeddings": True}
 hf = HuggingFaceEmbeddings(model_name=model_name, model_kwargs=model_kwargs, encode_kwargs=encode_kwargs)
 
 # Conexão com o PostgreSQL
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5433/vectordb")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/vectordb")
 
 def conectar_bd():
     """Estabelece conexão com o banco de dados PostgreSQL."""
@@ -51,7 +51,7 @@ def criar_tabelas():
         id SERIAL PRIMARY KEY,
         documento_id INTEGER REFERENCES documentos_originais(id) ON DELETE CASCADE,
         texto TEXT NOT NULL,
-        embedding vector(768),
+        embedding vector(1024),
         pagina INTEGER,
         posicao INTEGER,
         metadados JSONB
@@ -61,7 +61,13 @@ def criar_tabelas():
     # Criar índice para busca vetorial
     cursor.execute("""
     CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks_vetorizados 
-    USING ivfflat (embedding vector_cosine_ops);
+    USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+    """)
+    
+    # Criar índice de texto para busca híbrida
+    cursor.execute("""
+    CREATE INDEX IF NOT EXISTS chunks_texto_idx ON chunks_vetorizados 
+    USING gin(to_tsvector('portuguese', texto));
     """)
     
     cursor.close()
@@ -128,9 +134,20 @@ def processar_arquivo(arquivo_path):
         print(f"Erro ao processar arquivo {arquivo_path}: {e}")
         return None, [], []
 
+def testar_embeddings():
+    """Testa a dimensão dos embeddings gerados pelo modelo."""
+    texto_teste = "Este é um teste para verificar a dimensão dos embeddings gerados pelo modelo."
+    embedding = hf.embed_query(texto_teste)
+    print(f"Dimensão do embedding gerado: {len(embedding)}")
+    return len(embedding)
+
 def migrar_documentos(dir_documentos="documents"):
     """Migra documentos da pasta para o PostgreSQL."""
     criar_tabelas()
+    
+    # Testar dimensão dos embeddings
+    dim_embedding = testar_embeddings()
+    print(f"Usando embeddings com dimensão {dim_embedding}")
     
     # Obter lista de arquivos
     arquivos = lista_arquivos(dir_documentos)
@@ -194,5 +211,47 @@ def migrar_documentos(dir_documentos="documents"):
     conn.close()
     print("Migração concluída!")
 
+def testar_busca(query="CTA Value Tech"):
+    """Testa a busca vetorial no banco de dados."""
+    print(f"Testando busca para: '{query}'")
+    
+    # Gerar embedding para a consulta
+    query_embedding = hf.embed_query(query)
+    
+    # Conectar ao banco de dados
+    conn = conectar_bd()
+    cursor = conn.cursor(cursor_factory=DictCursor)
+    
+    # Buscar documentos similares
+    cursor.execute(
+        """
+        SELECT 
+            cv.id, 
+            cv.texto, 
+            cv.metadados,
+            1 - (cv.embedding <=> %s::vector) as similarity
+        FROM 
+            chunks_vetorizados cv
+        ORDER BY 
+            cv.embedding <=> %s::vector
+        LIMIT 3
+        """,
+        (query_embedding, query_embedding)
+    )
+    
+    search_result = cursor.fetchall()
+    
+    # Mostrar resultados
+    print(f"Encontrados {len(search_result)} resultados:")
+    for i, result in enumerate(search_result):
+        print(f"\nResultado {i+1} (Similaridade: {result['similarity']:.4f}):")
+        print(f"Texto: {result['texto'][:150]}...")
+    
+    cursor.close()
+    conn.close()
+
 if __name__ == "__main__":
-    migrar_documentos()
+    if os.getenv("TEST_SEARCH", "false").lower() == "true":
+        testar_busca(os.getenv("TEST_QUERY", "CTA Value Tech"))
+    else:
+        migrar_documentos()

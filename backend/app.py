@@ -159,7 +159,7 @@ async def chat(item: Item):
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=DictCursor)
         
-        # Buscar documentos similares
+        # Buscar documentos similares com limiar de similaridade
         cursor.execute(
             """
             SELECT 
@@ -169,14 +169,36 @@ async def chat(item: Item):
                 1 - (cv.embedding <=> %s::vector) as similarity
             FROM 
                 chunks_vetorizados cv
+            WHERE 
+                1 - (cv.embedding <=> %s::vector) > 0.5  -- Threshold de similaridade
             ORDER BY 
                 cv.embedding <=> %s::vector
             LIMIT 5
             """,
-            (query_embedding, query_embedding)
+            (query_embedding, query_embedding, query_embedding)
         )
         
         search_result = cursor.fetchall()
+        
+        # Verificar se encontrou resultados relevantes
+        if not search_result:
+            # Buscar alguns documentos mesmo sem passar no threshold para ter algum contexto
+            cursor.execute(
+                """
+                SELECT 
+                    cv.id, 
+                    cv.texto, 
+                    cv.metadados,
+                    1 - (cv.embedding <=> %s::vector) as similarity
+                FROM 
+                    chunks_vetorizados cv
+                ORDER BY 
+                    cv.embedding <=> %s::vector
+                LIMIT 3
+                """,
+                (query_embedding, query_embedding)
+            )
+            search_result = cursor.fetchall()
         
         # Preparar contexto para o LLM
         context = ""
@@ -184,27 +206,33 @@ async def chat(item: Item):
         mapping = {}
         
         for i, result in enumerate(search_result):
-            context += f"Contexto {i}\n{result['texto']}\n\n"
+            similarity_score = result['similarity']
+            context += f"Contexto {i} [relevância: {similarity_score:.2f}]\n{result['texto']}\n\n"
             path = result['metadados'].get('path', '') if result['metadados'] else ''
             mapping[f"Contexto {i}"] = path
             list_result.append({
                 "id": i, 
                 "path": path, 
-                "content": result['texto']
+                "content": result['texto'],
+                "similarity": similarity_score
             })
         
         # Fechar conexão com o banco de dados
         cursor.close()
         conn.close()
         
-        # Prompt do sistema
+        # Prompt do sistema melhorado
         rolemsg = {
         "role": "system",
         "content": f"""Você é um assistente especializado em valoração de tecnologias relacionadas ao Patrimônio Genético Nacional e Conhecimentos Tradicionais Associados.
 
-Responda à pergunta do usuário usando APENAS as informações fornecidas nos documentos do contexto. Se a informação não estiver nos documentos, indique claramente que não há dados suficientes sobre o assunto específico nos documentos disponíveis.
+Responda à pergunta do usuário usando as informações fornecidas nos documentos do contexto. Cada contexto tem uma pontuação de relevância associada a ele - contextos com pontuação mais alta são mais relevantes para a pergunta do usuário.
+
+Use seu melhor julgamento para determinar se os contextos fornecem informações suficientes para responder à pergunta do usuário. Se houver informações parciais, tente fornecer a melhor resposta possível com o que está disponível.
 
 IMPORTANTE: Não mencione os "contextos" ou "documentos" na sua resposta. O usuário não sabe que você está consultando diferentes fontes. Apresente a informação de forma natural e fluida.
+
+Se realmente não houver informações suficientes nos contextos para responder adequadamente, você pode indicar isso de forma sutil, sugerindo que há limitações nas informações disponíveis, mas tente sempre fornecer valor com o que você tem.
 
 Para conversas informais ou agradecimentos:
 - Se o usuário agradecer, responda com naturalidade: "De nada! Estou à disposição para ajudar com mais informações sobre CTA Value Tech."
@@ -230,12 +258,12 @@ Se a pergunta for sobre valores ou cálculos específicos de royalties, detalhe 
         # Preparar mensagens para o LLM
         messages = [rolemsg, {"role": "user", "content": f"Documents:\n{context}\n\nQuestion: {query}"}]
         
-        # Chamar o LLM
+        # Chamar o LLM com temperatura mais alta para menos hesitação
         resposta = client_ai.chat.completions.create(
             model="meta/llama3-70b-instruct",
             messages=messages,
             max_tokens=1024,
-            temperature=0.2,
+            temperature=0.3,  # Ligeiramente aumentada
             top_p=0.9,       
             frequency_penalty=0.3,
             presence_penalty=0.2,
@@ -243,6 +271,17 @@ Se a pergunta for sobre valores ou cálculos específicos de royalties, detalhe 
         )
         
         response = resposta.choices[0].message.content
+        
+        # Depuração: salvar informações sobre a consulta
+        debug_info = {
+            "query": query,
+            "num_results": len(search_result),
+            "similarity_scores": [round(r["similarity"], 3) for r in list_result],
+            "contexts_used": context[:300] + "..." if len(context) > 300 else context
+        }
+        
+        # Você pode registrar isso em um arquivo de log para depuração
+        print(f"Debug info: {debug_info}")
         
         return {"response": response}
         
