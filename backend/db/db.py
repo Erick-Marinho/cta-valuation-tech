@@ -1,10 +1,12 @@
 import os
 import psycopg2
+from psycopg2.extras import DictCursor, Json
+from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException
 
 # Conexão com o PostgreSQL
 DATABASE_URL = os.getenv("DATABASE_URL", "postgres://admin:-ABnTLnyH_2e~GBOYjI5v3Zgd3b.0~OL@caboose.proxy.rlwy.net:56050/cta-db")
 
-def conectar_bd():
+def get_db_connection():
     """Estabelece conexão com o banco de dados PostgreSQL."""
     conn = psycopg2.connect(DATABASE_URL)
     conn.autocommit = True
@@ -78,3 +80,61 @@ def limpar_tabela(nome_tabela):
       if conn:
           conn.close()
 
+
+def search_similar_documents(query_embedding):
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(cursor_factory=DictCursor)
+
+        cursor.execute(
+                """
+                SELECT 
+                    cv.id, 
+                    cv.texto, 
+                    cv.metadados,
+                    1 - (cv.embedding <=> %s::vector) as similarity
+                FROM 
+                    chunks_vetorizados cv
+                ORDER BY 
+                    cv.embedding <=> %s::vector
+                LIMIT 5
+                """,
+                (query_embedding, query_embedding)
+            )
+            
+        results = cursor.fetchall()
+        cursor.close()
+        connection.close()
+        return results
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao processar consulta: {str(e)}")
+    
+def list_documents():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=DictCursor)
+        
+        cursor.execute(
+            """
+            SELECT 
+                id, 
+                nome_arquivo, 
+                tipo_arquivo, 
+                data_upload, 
+                metadados,
+                (SELECT COUNT(*) FROM chunks_vetorizados WHERE documento_id = documentos_originais.id) as chunks_count
+            FROM 
+                documentos_originais
+            ORDER BY 
+                data_upload DESC
+            """
+        )
+        
+        documentos = cursor.fetchall()
+
+        cursor.close()
+        conn.close()
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao listar documentos: {str(e)}")

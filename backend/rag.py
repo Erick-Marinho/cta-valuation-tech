@@ -69,7 +69,6 @@ def processar_arquivo(arquivo_path):
         # Gerar embeddings para cada chunk
         embeddings = []
         for chunk in chunks:
-            print("blablabla")
             embedding = hf.embed_query(chunk)
             embeddings.append(embedding)
         
@@ -122,7 +121,6 @@ def migrar_documentos(dir_documentos="documents"):
             # Inserir chunks
             for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
                 chunk = limpar_texto(chunk)
-                print("chunk")
                 
                 metadados = {
                     "path": arquivo,
