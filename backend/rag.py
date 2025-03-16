@@ -1,257 +1,156 @@
+#!/usr/bin/env python
+"""
+Ferramenta de linha de comando para migração e teste de documentos.
+
+Este script permite importar documentos para o banco de dados e testar buscas,
+utilizando a arquitetura modular da aplicação.
+"""
 import os
-import PyPDF2
+import argparse
+import logging
+import asyncio
 import dotenv
 from os import listdir
 from os.path import isfile, join, isdir
-import psycopg2
-from psycopg2.extras import Json, DictCursor
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
 
+# Importar componentes da arquitetura modular
+from core.config import get_settings
+from core.services.document_service import get_document_service
+from core.services.embedding_service import get_embedding_service
+from core.services.rag_service import get_rag_service
+from db.schema import setup_database, is_database_healthy
+from utils.logging import configure_logging
+
+# Carregar variáveis de ambiente
 dotenv.load_dotenv()
 
-# Configuração do modelo de embeddings
-model_name = "intfloat/multilingual-e5-large-instruct"
-model_kwargs = {"device": "cuda" if os.getenv("USE_GPU", "false").lower() == "true" else "cpu"}
-encode_kwargs = {"normalize_embeddings": True}
-hf = HuggingFaceEmbeddings(model_name=model_name, model_kwargs=model_kwargs, encode_kwargs=encode_kwargs)
+# Configurar logging
+configure_logging()
+logger = logging.getLogger(__name__)
 
-# Conexão com o PostgreSQL
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/vectordb")
-
-def conectar_bd():
-    """Estabelece conexão com o banco de dados PostgreSQL."""
-    conn = psycopg2.connect(DATABASE_URL)
-    conn.autocommit = True
-    return conn
-
-def criar_tabelas():
-    """Cria as tabelas necessárias no PostgreSQL se não existirem."""
-    conn = conectar_bd()
-    cursor = conn.cursor()
-    
-    # Criar extensão pgvector
-    cursor.execute("CREATE EXTENSION IF NOT EXISTS vector;")
-    
-    # Tabela para documentos originais
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS documentos_originais (
-        id SERIAL PRIMARY KEY,
-        nome_arquivo TEXT NOT NULL,
-        tipo_arquivo TEXT NOT NULL,
-        conteudo_binario BYTEA NOT NULL,
-        data_upload TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        metadados JSONB
-    );
-    """)
-    
-    # Tabela para chunks vetorizados
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS chunks_vetorizados (
-        id SERIAL PRIMARY KEY,
-        documento_id INTEGER REFERENCES documentos_originais(id) ON DELETE CASCADE,
-        texto TEXT NOT NULL,
-        embedding vector(1024),
-        pagina INTEGER,
-        posicao INTEGER,
-        metadados JSONB
-    );
-    """)
-    
-    # Criar índice para busca vetorial
-    cursor.execute("""
-    CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks_vetorizados 
-    USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-    """)
-    
-    # Criar índice de texto para busca híbrida
-    cursor.execute("""
-    CREATE INDEX IF NOT EXISTS chunks_texto_idx ON chunks_vetorizados 
-    USING gin(to_tsvector('portuguese', texto));
-    """)
-    
-    cursor.close()
-    conn.close()
-    print("Tabelas criadas com sucesso!")
-
-def lista_arquivos(dir):
+def lista_arquivos(dir_path):
     """Listar todos os arquivos em um diretório e seus subdiretórios."""
     arquivos_list = []
 
-    for item in listdir(dir):
-        if isfile(join(dir, item)):
-            arquivos_list.append(join(dir, item))
-        elif isdir(join(dir, item)):
-            arquivos_list += lista_arquivos(join(dir, item))
+    for item in listdir(dir_path):
+        item_path = join(dir_path, item)
+        if isfile(item_path):
+            arquivos_list.append(item_path)
+        elif isdir(item_path):
+            arquivos_list += lista_arquivos(item_path)
     return arquivos_list
-  
-def limpar_texto(texto):
-    """Limpa o texto para evitar problemas com caracteres especiais."""
-    if texto is None:
-        return ""
-    texto_limpo = texto.replace("\x00", "")
-    return texto_limpo
 
-def processar_arquivo(arquivo_path):
-    """Processa um arquivo PDF e retorna seu conteúdo binário e chunks de texto."""
-    try:
-        # Ler o arquivo binário
-        with open(arquivo_path, 'rb') as file:
-            conteudo_binario = file.read()
-        
-        # Extrair texto do PDF
-        conteudo_texto = ""
-        if arquivo_path.endswith(".pdf"):
-            read = PyPDF2.PdfReader(arquivo_path)
-            for page in read.pages:
-                texto_pagina = page.extract_text()
-                if texto_pagina:
-                    texto_pagina = limpar_texto(texto_pagina)
-                    conteudo_texto += " " + texto_pagina
-        
-        # Se não tiver conteúdo, retornar vazio
-        if not conteudo_texto.strip():
-            return conteudo_binario, [], []
-        
-        # Dividir texto em chunks
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=800,
-            chunk_overlap=100,
-            separators=["\n\n", "\n", ". ", " ", ""]
-        )
-        
-        chunks = splitter.split_text(conteudo_texto)
-        
-        # Gerar embeddings para cada chunk
-        embeddings = []
-        for chunk in chunks:
-            embedding = hf.embed_query(chunk)
-            embeddings.append(embedding)
-        
-        return conteudo_binario, chunks, embeddings
+async def migrar_documentos(dir_documentos="documents"):
+    """Migra documentos da pasta para o banco de dados."""
+    logger.info(f"Iniciando migração de documentos da pasta: {dir_documentos}")
     
-    except Exception as e:
-        print(f"Erro ao processar arquivo {arquivo_path}: {e}")
-        return None, [], []
-
-def testar_embeddings():
-    """Testa a dimensão dos embeddings gerados pelo modelo."""
-    texto_teste = "Este é um teste para verificar a dimensão dos embeddings gerados pelo modelo."
-    embedding = hf.embed_query(texto_teste)
-    print(f"Dimensão do embedding gerado: {len(embedding)}")
-    return len(embedding)
-
-def migrar_documentos(dir_documentos="documents"):
-    """Migra documentos da pasta para o PostgreSQL."""
-    criar_tabelas()
+    # Inicializar banco de dados
+    setup_database()
+    if not is_database_healthy():
+        logger.error("Banco de dados não está saudável. Abortando migração.")
+        return
     
-    # Testar dimensão dos embeddings
-    dim_embedding = testar_embeddings()
-    print(f"Usando embeddings com dimensão {dim_embedding}")
+    # Obter serviço de documentos
+    document_service = get_document_service()
     
     # Obter lista de arquivos
     arquivos = lista_arquivos(dir_documentos)
-    print(f"Encontrados {len(arquivos)} arquivos em {dir_documentos}")
+    logger.info(f"Encontrados {len(arquivos)} arquivos em {dir_documentos}")
     
     if not arquivos:
-        print("Nenhum arquivo encontrado para migração")
+        logger.warning("Nenhum arquivo encontrado para migração")
         return
     
-    conn = conectar_bd()
-    
+    # Processar cada arquivo
     for arquivo in arquivos:
         try:
             nome_arquivo = os.path.basename(arquivo)
-            tipo_arquivo = os.path.splitext(arquivo)[1][1:].lower()  # Obtém a extensão sem o ponto
+            tipo_arquivo = os.path.splitext(arquivo)[1][1:].lower()
             
-            print(f"Processando: {nome_arquivo}")
-            
-            # Extrair conteúdo e processar
-            conteudo_binario, chunks, embeddings = processar_arquivo(arquivo)
-            if not conteudo_binario:
-                print(f"Pulando arquivo {nome_arquivo}: erro na extração")
+            # Verificar se é um tipo suportado (PDF)
+            if tipo_arquivo != "pdf":
+                logger.warning(f"Pulando arquivo {nome_arquivo}: tipo não suportado ({tipo_arquivo})")
                 continue
+                
+            logger.info(f"Processando: {nome_arquivo}")
             
-            # Inserir documento original
-            cursor = conn.cursor(cursor_factory=DictCursor)
-            cursor.execute(
-                """
-                INSERT INTO documentos_originais (nome_arquivo, tipo_arquivo, conteudo_binario, metadados)
-                VALUES (%s, %s, %s, %s)
-                RETURNING id
-                """,
-                (nome_arquivo, tipo_arquivo, psycopg2.Binary(conteudo_binario), Json({"path": arquivo}))
+            # Ler conteúdo do arquivo
+            with open(arquivo, 'rb') as file:
+                conteudo_binario = file.read()
+            
+            # Processar documento usando o serviço modular
+            documento = await document_service.process_document(
+                file_name=nome_arquivo,
+                file_content=conteudo_binario,
+                file_type=tipo_arquivo,
+                metadata={"path": arquivo, "origem": "importacao_em_lote"}
             )
             
-            documento_id = cursor.fetchone()['id']
-            
-            # Inserir chunks
-            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-                chunk = limpar_texto(chunk)
-                
-                metadados = {
-                    "path": arquivo,
-                    "chunk_id": i
-                }
-                
-                cursor.execute(
-                    """
-                    INSERT INTO chunks_vetorizados 
-                    (documento_id, texto, embedding, pagina, posicao, metadados)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    """,
-                    (documento_id, chunk, embedding, 1, i, Json(metadados))
-                )
-            
-            print(f"Documento {nome_arquivo} migrado com {len(chunks)} chunks")
+            logger.info(f"Documento {nome_arquivo} processado com sucesso. ID: {documento.id}, Chunks: {documento.chunks_count}")
             
         except Exception as e:
-            print(f"Erro ao migrar documento {arquivo}: {e}")
+            logger.error(f"Erro ao processar arquivo {arquivo}: {e}")
     
-    conn.close()
-    print("Migração concluída!")
+    logger.info("Migração concluída!")
 
-def testar_busca(query="CTA Value Tech"):
-    """Testa a busca vetorial no banco de dados."""
-    print(f"Testando busca para: '{query}'")
+async def testar_busca(query="CTA Value Tech"):
+    """Testa a busca RAG usando a nova arquitetura."""
+    logger.info(f"Testando busca para: '{query}'")
     
-    # Gerar embedding para a consulta
-    query_embedding = hf.embed_query(query)
+    # Verificar banco de dados
+    if not is_database_healthy():
+        logger.error("Banco de dados não está saudável. Abortando teste.")
+        return
     
-    # Conectar ao banco de dados
-    conn = conectar_bd()
-    cursor = conn.cursor(cursor_factory=DictCursor)
+    # Obter serviço RAG
+    rag_service = get_rag_service()
     
-    # Buscar documentos similares
-    cursor.execute(
-        """
-        SELECT 
-            cv.id, 
-            cv.texto, 
-            cv.metadados,
-            1 - (cv.embedding <=> %s::vector) as similarity
-        FROM 
-            chunks_vetorizados cv
-        ORDER BY 
-            cv.embedding <=> %s::vector
-        LIMIT 3
-        """,
-        (query_embedding, query_embedding)
+    # Realizar busca
+    result = await rag_service.process_query(
+        query=query,
+        include_debug_info=True
     )
     
-    search_result = cursor.fetchall()
+    # Exibir resultado
+    logger.info(f"Resposta gerada em {result.get('processing_time', 0):.2f} segundos:")
+    print("\n" + "="*80)
+    print(result.get("response", "Sem resposta"))
+    print("="*80 + "\n")
     
-    # Mostrar resultados
-    print(f"Encontrados {len(search_result)} resultados:")
-    for i, result in enumerate(search_result):
-        print(f"\nResultado {i+1} (Similaridade: {result['similarity']:.4f}):")
-        print(f"Texto: {result['texto'][:150]}...")
+    # Exibir informações de debug, se disponíveis
+    if "debug_info" in result:
+        debug = result["debug_info"]
+        logger.info(f"Resultados encontrados: {debug.get('num_results', 0)}")
+        
+        if "sources" in debug and "scores" in debug:
+            for i, (source, score) in enumerate(zip(debug["sources"], debug["scores"])):
+                logger.info(f"Resultado {i+1}: {source} (score: {score:.4f})")
+
+async def main():
+    """Função principal do script."""
+    parser = argparse.ArgumentParser(description='Ferramenta para migração de documentos e testes de busca')
     
-    cursor.close()
-    conn.close()
+    # Definir subcomandos
+    subparsers = parser.add_subparsers(dest='comando', help='Comandos disponíveis')
+    
+    # Comando de migração
+    migrate_parser = subparsers.add_parser('migrate', help='Migrar documentos para o banco de dados')
+    migrate_parser.add_argument('--dir', type=str, default='documents', help='Diretório de documentos')
+    
+    # Comando de busca
+    search_parser = subparsers.add_parser('search', help='Testar busca RAG')
+    search_parser.add_argument('query', type=str, nargs='?', default='CTA Value Tech', help='Consulta para teste')
+    
+    # Parsing dos argumentos
+    args = parser.parse_args()
+    
+    # Executar comando apropriado
+    if args.comando == 'migrate':
+        await migrar_documentos(args.dir)
+    elif args.comando == 'search':
+        await testar_busca(args.query)
+    else:
+        parser.print_help()
 
 if __name__ == "__main__":
-    if os.getenv("TEST_SEARCH", "false").lower() == "true":
-        testar_busca(os.getenv("TEST_QUERY", "CTA Value Tech"))
-    else:
-        migrar_documentos()
+    asyncio.run(main())
