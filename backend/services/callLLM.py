@@ -2,6 +2,7 @@ import os
 from openai import OpenAI
 from typing import List, Dict
 
+
 # Cliente OpenAI para geração de texto
 client_ai = OpenAI(
     base_url="https://integrate.api.nvidia.com/v1",

@@ -12,14 +12,16 @@ from utils.createJSON import create_json_from_chunks
 
 from db.db import conectar_bd, criar_tabelas
 from services import getChunks
+from config import EMBEDDING_MODEL, DB_CONFIG
 
 dotenv.load_dotenv()
 
 # Configuração do modelo de embeddings
-model_name = "intfloat/multilingual-e5-large-instruct"
-model_kwargs = {"device": "cpu"}
-encode_kwargs = {"normalize_embeddings": True}
-hf = HuggingFaceEmbeddings(model_name=model_name, model_kwargs=model_kwargs, encode_kwargs=encode_kwargs)
+hf = HuggingFaceEmbeddings(
+    model_name=EMBEDDING_MODEL["model_name"],
+    model_kwargs=EMBEDDING_MODEL["model_kwargs"],
+    encode_kwargs=EMBEDDING_MODEL["encode_kwargs"]
+    )
 
 def lista_arquivos(dir):
     """Listar todos os arquivos em um diretório e seus subdiretórios."""

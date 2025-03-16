@@ -1,0 +1,157 @@
+# Melhorias Sugeridas para Pipeline RAG - CTA Valuation Tech
+
+## 1. Otimização do Chunking
+- Situação atual: NLTK com tamanho fixo de 800 caracteres
+- Melhorias sugeridas:
+  * Implementar chunking adaptativo baseado no conteúdo
+  * Usar técnicas de segmentação semântica
+  * Adicionar detecção de seções/títulos
+  * Preservar estruturas hierárquicas dos documentos
+
+## 2. Melhorias nos Embeddings
+- Modelo atual: "intfloat/multilingual-e5-large-instruct"
+- Sugestões:
+  * Implementar cache de embeddings para documentos frequentes
+  * Adicionar fine-tuning do modelo para domínio de valoração
+  * Implementar reranking usando cross-encoders
+  * Adicionar pesos diferentes para diferentes tipos de conteúdo
+
+## 3. Otimização do Prompt
+- Melhorias sugeridas:
+  * Adicionar exemplos few-shot específicos para valoração
+  * Implementar chain-of-thought para raciocínio estruturado
+  * Criar templates específicos por tipo de pergunta
+  * Adicionar instruções para citação de fontes
+
+## 4. Parâmetros do LLM
+- Ajustes sugeridos:
+  * Temperature (0.2) manter para respostas técnicas
+  * Aumentar max_tokens para respostas mais elaboradas
+  * Ajustar frequency_penalty para evitar repetições
+  * Implementar sistema de retry com backoff
+
+## 5. Melhorias na Recuperação
+- Implementações sugeridas:
+  * Hybrid search (BM25 + embeddings)
+  * Filtragem por metadata
+  * Sistema de feedback para melhorar resultados
+  * Cache de consultas frequentes
+
+## 6. Processamento de Documentos
+- Melhorias:
+  * Adicionar OCR para melhor extração de texto
+  * Implementar extração de tabelas e dados estruturados
+  * Preservar formatação relevante
+  * Adicionar extração de entidades nomeadas
+
+## 7. Otimizações de Performance
+- Implementações:
+  * Batch processing para documentos grandes
+  * Paralelização do processamento de embeddings
+  * Cache em diferentes níveis
+  * Compressão de embeddings
+
+## 8. Qualidade das Respostas
+- Adições sugeridas:
+  * Sistema de validação de respostas
+  * Detecção de contradições
+  * Métricas de confiança
+  * Explicabilidade das respostas
+
+## Exemplos de Implementação
+
+### 1. Chunking Adaptativo
+```python
+def chunking_adaptativo(texto):
+    # Detecta seções/títulos
+    secoes = re.split(r'\n#{1,6}\s+', texto)
+    
+    chunks = []
+    for secao in secoes:
+        # Tamanho adaptativo baseado no conteúdo
+        tamanho_chunk = min(len(secao), 1000)
+        
+        # Preserva contexto semântico
+        if len(secao) > tamanho_chunk:
+            # Divide em sentenças
+            sentences = nltk.sent_tokenize(secao)
+            current_chunk = ""
+            
+            for sent in sentences:
+                if len(current_chunk) + len(sent) <= tamanho_chunk:
+                    current_chunk += sent + " "
+                else:
+                    chunks.append(current_chunk.strip())
+                    current_chunk = sent + " "
+            
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+        else:
+            chunks.append(secao.strip())
+    
+    return chunks
+```
+
+### 2. Hybrid Search
+```python
+def hybrid_search(query, top_k=5):
+    # Busca por embeddings
+    query_embedding = hf.embed_query(query)
+    vector_results = db.search_similar_documents(query_embedding, top_k=top_k*2)
+    
+    # Busca por BM25
+    bm25_results = db.search_bm25(query, top_k=top_k*2)
+    
+    # Combina resultados
+    combined_results = []
+    seen_ids = set()
+    
+    for result in vector_results + bm25_results:
+        if result['id'] not in seen_ids:
+            seen_ids.add(result['id'])
+            combined_results.append(result)
+    
+    # Reranking
+    reranked_results = rerank_results(query, combined_results[:top_k])
+    
+    return reranked_results
+```
+
+### 3. Template de Prompt
+```python
+def create_prompt_template(query_type):
+    templates = {
+        'valoracao': """
+        Analise o seguinte caso de valoração:
+        {contexto}
+        
+        Siga estas etapas:
+        1. Identifique os componentes chave da tecnologia
+        2. Liste os fatores de valoração relevantes
+        3. Explique a metodologia aplicável
+        4. Apresente os cálculos detalhados
+        5. Forneça uma conclusão fundamentada
+        
+        Pergunta: {query}
+        """,
+        'regulatorio': """..."""
+    }
+    return templates.get(query_type, templates['default'])
+```
+
+## Priorização Sugerida
+
+1. Primeira Fase (Impacto Imediato):
+   - Implementar chunking adaptativo
+   - Otimizar prompts com templates específicos
+   - Adicionar hybrid search
+
+2. Segunda Fase (Melhorias de Qualidade):
+   - Implementar cache de embeddings
+   - Adicionar sistema de validação de respostas
+   - Melhorar processamento de documentos
+
+3. Terceira Fase (Otimizações Avançadas):
+   - Fine-tuning do modelo
+   - Implementar feedback loop
+   - Adicionar métricas de confiança 

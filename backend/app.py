@@ -16,6 +16,7 @@ from services import getChunks
 from services.callLLM import call_llm
 from utils.createJSON import create_json_from_db
 from db import db
+from config import EMBEDDING_MODEL, DB_CONFIG
 
 dotenv.load_dotenv()
 
@@ -23,10 +24,11 @@ class Item(BaseModel):
     query: str
 
 # Configuração do modelo de embeddings
-model_name = "intfloat/multilingual-e5-large-instruct"
-model_kwargs = {"device": "cpu"}
-encode_kwargs = {"normalize_embeddings": True}
-hf = HuggingFaceEmbeddings(model_name=model_name, model_kwargs=model_kwargs, encode_kwargs=encode_kwargs)
+hf = HuggingFaceEmbeddings(
+    model_name=EMBEDDING_MODEL["model_name"],
+    model_kwargs=EMBEDDING_MODEL["model_kwargs"],
+    encode_kwargs=EMBEDDING_MODEL["encode_kwargs"]
+    )
 
 app = FastAPI()
 

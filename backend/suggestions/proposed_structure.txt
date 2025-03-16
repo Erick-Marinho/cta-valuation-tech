@@ -1,0 +1,86 @@
+Estrutura de Diretórios Proposta para o Aplicativo RAG
+
+📁 backend/
+├── 📁 api/                          # Camada de apresentação (API endpoints)
+│   ├── routes.py                    # Rotas da API
+│   └── validators.py                # Validadores de entrada
+│
+├── 📁 core/                         # Camada de aplicação (Lógica de negócios)
+│   ├── document_processor.py        # Processamento de documentos
+│   ├── embedding_service.py         # Serviço de geração de embeddings
+│   ├── text_splitter.py            # Serviço de divisão de texto
+│   └── rag_service.py              # Serviço principal do RAG
+│
+├── 📁 infrastructure/               # Camada de infraestrutura
+│   ├── 📁 database/                # Camada de persistência
+│   │   ├── repositories/           # Repositórios para acesso a dados
+│   │   ├── models.py               # Modelos do banco de dados
+│   │   └── connection.py           # Configuração de conexão
+│   │
+│   ├── 📁 storage/                 # Gerenciamento de arquivos
+│   │   └── file_manager.py         # Manipulação de arquivos
+│   │
+│   └── 📁 embeddings/              # Configuração de embeddings
+│       └── model_config.py         # Configuração do modelo
+│
+├── 📁 utils/                        # Utilitários
+│   ├── logger.py                   # Configuração de logging
+│   ├── exceptions.py               # Exceções personalizadas
+│   └── text_cleaner.py            # Limpeza de texto
+│
+├── 📁 config/                       # Configurações
+│   ├── settings.py                 # Configurações gerais
+│   └── environment.py              # Variáveis de ambiente
+│
+├── 📁 tests/                        # Testes
+│   ├── unit/                       # Testes unitários
+│   └── integration/                # Testes de integração
+│
+└── main.py                         # Ponto de entrada da aplicação
+
+Responsabilidades dos Componentes:
+
+1. API (📁 api/)
+   - Gerenciamento de rotas e endpoints
+   - Validação de entrada
+   - Formatação de respostas
+
+2. Core (📁 core/)
+   - Implementação da lógica de negócios
+   - Processamento de documentos
+   - Geração de embeddings
+   - Divisão de texto
+   - Serviços principais do RAG
+
+3. Infrastructure (📁 infrastructure/)
+   - Gerenciamento de banco de dados
+   - Armazenamento de arquivos
+   - Configuração de modelos de embeddings
+   - Implementação de repositórios
+
+4. Utils (📁 utils/)
+   - Funções auxiliares
+   - Sistema de logging
+   - Tratamento de exceções
+   - Limpeza e processamento de texto
+
+5. Config (📁 config/)
+   - Configurações centralizadas
+   - Gerenciamento de variáveis de ambiente
+   - Configurações específicas do ambiente
+
+6. Tests (📁 tests/)
+   - Testes unitários
+   - Testes de integração
+   - Fixtures e mocks
+
+Próximos Passos para Implementação:
+
+1. Criar a estrutura de diretórios base
+2. Migrar código existente para os novos módulos
+3. Implementar padrões de projeto (Repository, Factory)
+4. Adicionar logging e tratamento de erros
+5. Desenvolver testes unitários
+6. Documentar interfaces e componentes
+7. Implementar validações de entrada
+8. Configurar ambiente de desenvolvimento 

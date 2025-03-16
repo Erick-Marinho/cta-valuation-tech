@@ -3,18 +3,27 @@ import psycopg2
 from psycopg2.extras import DictCursor, Json
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException
 
+
+from config import DB_CONFIG
+
 # Conexão com o PostgreSQL
 DATABASE_URL = os.getenv("DATABASE_URL", "postgres://admin:-ABnTLnyH_2e~GBOYjI5v3Zgd3b.0~OL@caboose.proxy.rlwy.net:56050/cta-db")
 
 def get_db_connection():
     """Estabelece conexão com o banco de dados PostgreSQL."""
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = psycopg2.connect(
+        host=DB_CONFIG["host"],
+        database=DB_CONFIG["database"],
+        user=DB_CONFIG["user"],
+        password=DB_CONFIG["password"],
+        port=DB_CONFIG["port"]
+    )
     conn.autocommit = True
     return conn
 
 def criar_tabelas():
     """Cria as tabelas necessárias no PostgreSQL se não existirem."""
-    conn = conectar_bd()
+    conn = get_db_connection()
     cursor = conn.cursor()
     
     # Criar extensão pgvector
@@ -59,7 +68,7 @@ def criar_tabelas():
 def limpar_tabela(nome_tabela):
   try:
       # Conectar ao banco de dados
-      conn = conectar_bd()
+      conn = get_db_connection()
       cursor = conn.cursor()
       
       # Truncar a tabela (remover todos os registros)
