@@ -29,6 +29,12 @@ def normalize_text(text: str) -> str:
     
     # Normalizar quebras de linha
     text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    # Normalizar espaços
+    text = ' '.join(text.split())
+    
+    # Remover quebras de linha desnecessárias
+    text = text.replace('\n', ' ').strip()
     
     # Normalizar múltiplas quebras de linha
     while "\n\n\n" in text:

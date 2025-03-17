@@ -63,6 +63,8 @@ async def process_chat_query(
             filtro_documentos=query.document_ids,
             include_debug_info=include_debug
         )
+
+        print(result)
         
         return ChatResponse(
             response=result.get("response", ""),

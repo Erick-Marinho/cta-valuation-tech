@@ -12,6 +12,7 @@ from processors.chunkers.semantic_chunker import create_semantic_chunks
 from db.repositories.document_repository import DocumentoRepository
 from db.repositories.chunk_repository import ChunkRepository
 from utils.logging import track_timing
+from utils.createJSON import create_json_from_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,8 @@ class DocumentService:
             chunk_overlap = self.settings.CHUNK_OVERLAP
             
             chunks = create_semantic_chunks(text, chunk_size, chunk_overlap)
+
+            create_json_from_chunks(chunks, file_name)
             
             if not chunks:
                 logger.warning(f"Nenhum chunk extraído do documento {file_name}")

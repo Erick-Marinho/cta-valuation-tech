@@ -23,29 +23,29 @@ class Settings(BaseSettings):
         PORT: Porta do servidor
         CORS_ORIGINS: Origens permitidas para CORS
     """
-    APP_NAME: str = "CTA Value Tech"
-    APP_VERSION: str = "1.0.0"
-    DEBUG: bool = False
+    APP_NAME: str = os.getenv("APP_NAME")
+    APP_VERSION: str = os.getenv("APP_VERSION")
+    DEBUG: bool = os.getenv("DEBUG")
     
     # Database
-    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5433/vectordb"
-    AUTO_INIT_DB: bool = False  # Adicionado
+    DATABASE_URL: str = os.getenv("DATABASE_URL")
+    AUTO_INIT_DB: bool = os.getenv("AUTO_INIT_DB")
     
     # Serviços externos
     API_KEY_NVIDEA: str
-    API_KEY: Optional[str] = None  # Adicionado
+    API_KEY: Optional[str] = None
     
     # Embeddings
-    EMBEDDING_MODEL: str = "intfloat/multilingual-e5-large-instruct"
-    EMBEDDING_DIMENSION: int = 1024
-    USE_GPU: bool = False  # Adicionado
+    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL")
+    EMBEDDING_DIMENSION: int = os.getenv("EMBEDDING_DIMENSION")
+    USE_GPU: bool = os.getenv("USE_GPU")
     
     # Processamento de texto
-    CHUNK_SIZE: int = 800
-    CHUNK_OVERLAP: int = 100
+    CHUNK_SIZE: int = os.getenv("CHUNK_SIZE")
+    CHUNK_OVERLAP: int = os.getenv("CHUNK_OVERLAP")
     
     # Servidor
-    PORT: int = 8000
+    PORT: int = os.getenv("PORT")
     CORS_ORIGINS: list = ["*"]
     
     # RAG

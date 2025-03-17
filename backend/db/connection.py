@@ -2,16 +2,19 @@
 Gerenciamento de conexões com o banco de dados PostgreSQL.
 """
 import os
+from dotenv import load_dotenv
 import psycopg2
 from psycopg2.extras import DictCursor
 from contextvars import ContextVar
 from typing import Optional, Dict, Any
 import logging
 
+load_dotenv()
+
 logger = logging.getLogger(__name__)
 
 # URL de conexão com o banco de dados
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5433/vectordb")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 # ContextVar para armazenar conexões dentro de contextos assíncronos
 connection_context: ContextVar[Optional[Dict[str, Any]]] = ContextVar("connection_context", default=None)

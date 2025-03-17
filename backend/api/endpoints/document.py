@@ -117,7 +117,8 @@ async def list_documents(
         raise HTTPException(status_code=500, detail=f"Erro ao listar documentos: {str(e)}")
 
 @router.post("/upload", response_model=DocumentUploadResponse, 
-             dependencies=[Depends(validate_api_key), Depends(verify_db_health)])
+             #dependencies=[Depends(validate_api_key), Depends(verify_db_health)]
+                           )
 async def upload_document(
     file: UploadFile = File(...),
     document_service: DocumentService = Depends(get_document_service)
