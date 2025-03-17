@@ -8,7 +8,7 @@ from core.exceptions import DocumentProcessingError
 from ..models.document import Document
 from .embedding_service import get_embedding_service
 from processors.extractors.pdf_extractor import PDFExtractor
-from processors.chunkers.semantic_chunker import create_semantic_chunks
+from processors.chunkers import create_semantic_chunks, create_nltk_chunks
 from db.repositories.document_repository import DocumentoRepository
 from db.repositories.chunk_repository import ChunkRepository
 from utils.logging import track_timing
@@ -94,7 +94,8 @@ class DocumentService:
             chunk_size = self.settings.CHUNK_SIZE
             chunk_overlap = self.settings.CHUNK_OVERLAP
             
-            chunks = create_semantic_chunks(text, chunk_size, chunk_overlap)
+            #chunks = create_semantic_chunks(text, chunk_size, chunk_overlap)
+            chunks = create_nltk_chunks(text, chunk_size, chunk_overlap)
 
             create_json_from_chunks(chunks, file_name)
             
