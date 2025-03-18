@@ -30,7 +30,3 @@ def create_nltk_chunks(text, chunk_size=800, overlap=200):
 
     return chunks
 
-# Exemplo de uso
-#texto = """Seu texto original aqui..."""
-#texto_limpo = clean_text(texto)
-#chunks = create_nltk_chunks(texto_limpo)

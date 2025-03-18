@@ -4,6 +4,7 @@ Adaptador para embeddings do HuggingFace.
 import logging
 from typing import List, Dict, Any, Optional
 from langchain_huggingface import HuggingFaceEmbeddings
+from core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ class HuggingFaceEmbeddingAdapter:
     proporcionando uma interface consistente independente da implementação.
     """
     
-    def __init__(self, model_name: str = "intfloat/multilingual-e5-large-instruct", 
+    def __init__(self, model_name: str = get_settings().EMBEDDING_MODEL, 
                 device: str = "cpu", normalize: bool = True):
         """
         Inicializa o adaptador de embeddings.

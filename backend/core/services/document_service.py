@@ -13,6 +13,7 @@ from db.repositories.document_repository import DocumentoRepository
 from db.repositories.chunk_repository import ChunkRepository
 from utils.logging import track_timing
 from utils.createJSON import create_json_from_chunks
+from infra.mlflow.mlflow_utils import experiment_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class DocumentService:
         self.embedding_service = get_embedding_service()
     
     @track_timing
+    @experiment_tracker.log_document_processing
     async def process_document(self, file_name: str, file_content: bytes, 
                               file_type: str = "pdf",
                               metadata: Dict[str, Any] = None) -> Document:
@@ -94,8 +96,8 @@ class DocumentService:
             chunk_size = self.settings.CHUNK_SIZE
             chunk_overlap = self.settings.CHUNK_OVERLAP
             
-            #chunks = create_semantic_chunks(text, chunk_size, chunk_overlap)
-            chunks = create_nltk_chunks(text, chunk_size, chunk_overlap)
+            chunks = create_semantic_chunks(text, chunk_size, chunk_overlap)
+            #chunks = create_nltk_chunks(text, chunk_size, chunk_overlap)
 
             create_json_from_chunks(chunks, file_name)
             

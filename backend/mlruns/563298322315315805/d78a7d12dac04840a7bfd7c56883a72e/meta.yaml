@@ -1,0 +1,15 @@
+artifact_uri: file:///C:/Users/RodolfoOliveira/Desktop/Rodolfo/Repos/cta-valuation-tech/backend/mlruns/563298322315315805/d78a7d12dac04840a7bfd7c56883a72e/artifacts
+end_time: 1742256804057
+entry_point_name: ''
+experiment_id: '563298322315315805'
+lifecycle_stage: active
+run_id: d78a7d12dac04840a7bfd7c56883a72e
+run_name: query_processing_20250317_211308
+run_uuid: d78a7d12dac04840a7bfd7c56883a72e
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1742256788926
+status: 3
+tags: []
+user_id: RodolfoOliveira
