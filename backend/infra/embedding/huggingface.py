@@ -16,7 +16,7 @@ class HuggingFaceEmbeddingAdapter:
     """
     
     def __init__(self, model_name: str = "intfloat/multilingual-e5-large-instruct", 
-                device: str = "cpu", normalize: bool = True):
+                device: str = "cuda", normalize: bool = True):
         """
         Inicializa o adaptador de embeddings.
         

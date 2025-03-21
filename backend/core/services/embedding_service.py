@@ -37,7 +37,8 @@ class EmbeddingService:
         """
         try:
             model_name = self.settings.EMBEDDING_MODEL
-            device = "cuda" if self.settings.DEBUG else "cpu"
+            # device = "cuda" if self.settings.DEBUG else "cpu"
+            device = "cuda"
             
             logger.info(f"Inicializando modelo de embeddings {model_name} no dispositivo {device}")
             

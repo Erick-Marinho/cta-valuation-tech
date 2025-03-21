@@ -71,7 +71,8 @@ class RAGService:
                 query_embedding=query_embedding,
                 limite=limit,
                 alpha=alpha,
-                filtro_documentos=filtro_documentos
+                filtro_documentos=filtro_documentos,
+                threshold=self.settings.SEARCH_THRESHOLD
             )
             
             # 4. Reranking para melhorar a relevância
@@ -90,14 +91,14 @@ class RAGService:
             # 6. Construir o prompt para o LLM
             system_prompt = f"""Você é um assistente especializado em valoração de tecnologias relacionadas ao Patrimônio Genético Nacional e Conhecimentos Tradicionais Associados.
 
-Responda à pergunta do usuário usando as informações fornecidas nos documentos do contexto. Cada contexto tem uma pontuação de relevância associada a ele - contextos com pontuação mais alta são mais relevantes para a pergunta do usuário.
+              Responda à pergunta do usuário usando as informações fornecidas nos documentos do contexto. Cada contexto tem uma pontuação de relevância associada a ele - contextos com pontuação mais alta são mais relevantes para a pergunta do usuário.
 
-IMPORTANTE: Não mencione os "contextos" ou "documentos" na sua resposta. O usuário não sabe que você está consultando diferentes fontes. Apresente a informação de forma natural e fluida.
+              IMPORTANTE: Não mencione os "contextos" ou "documentos" na sua resposta. O usuário não sabe que você está consultando diferentes fontes. Apresente a informação de forma natural e fluida.
 
-Se realmente não houver informações suficientes nos contextos para responder adequadamente, você pode indicar isso de forma sutil, sugerindo que há limitações nas informações disponíveis, mas tente sempre fornecer valor com o que você tem.
+              Se realmente não houver informações suficientes nos contextos para responder adequadamente, você pode indicar isso de forma sutil, sugerindo que há limitações nas informações disponíveis, mas tente sempre fornecer valor com o que você tem.
 
-As respostas devem ser em português brasileiro formal, mantendo a terminologia técnica apropriada ao tema de biodiversidade, conhecimentos tradicionais e propriedade intelectual.
-"""
+              As respostas devem ser em português brasileiro formal, mantendo a terminologia técnica apropriada ao tema de biodiversidade, conhecimentos tradicionais e propriedade intelectual.
+            """
             
             # 7. Gerar resposta com o LLM
             llm_input = f"Documentos:\n{context}\n\nPergunta: {query}"

@@ -5,6 +5,7 @@ import logging
 from typing import List, Dict, Any, Tuple
 from ..connection import execute_query, execute_query_single_result
 from ..models.chunk import Chunk
+from core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,9 @@ WHERE
 def realizar_busca_hibrida(query_text: str, query_embedding: List[float], 
                          limite: int = 5, alpha: float = 0.7,
                          filtro_documentos: List[int] = None,
-                         filtro_metadados: Dict[str, Any] = None) -> List[Chunk]:
+                         filtro_metadados: Dict[str, Any] = None,
+                         threshold: float = None,
+                         ) -> List[Chunk]:
     """
     Realiza uma busca híbrida avançada combinando busca vetorial e textual,
     com opções de filtragem por IDs de documentos e metadados.
@@ -77,6 +80,11 @@ def realizar_busca_hibrida(query_text: str, query_embedding: List[float],
     Returns:
         list: Lista de chunks ordenados por score combinado
     """
+    
+    settings = get_settings()
+    if threshold is None:
+      threshold = settings.SEARCH_THRESHOLD
+    
     try:
         # Construir cláusulas de filtro se necessário
         filter_clause = ""
@@ -144,17 +152,21 @@ def realizar_busca_hibrida(query_text: str, query_embedding: List[float],
                 chunk.similarity_score = similarity_score
                 combined_results[chunk_id] = chunk
         
-        # Calcular scores combinados
+        #Calcular scores combinados
         for chunk in combined_results.values():
             # Normalizar text_score
             norm_text_score = min(chunk.text_score, 1.0)
             
-            # Combinar scores
+        #     # Combinar scores
             chunk.combined_score = alpha * chunk.similarity_score + (1 - alpha) * norm_text_score
+        
+        # Filtro de threshold    
+        filtered_chunks = [chunk for chunk in combined_results.values()
+                           if chunk.combined_score >= threshold]    
         
         # Ordenar e limitar resultados
         sorted_chunks = sorted(
-            combined_results.values(), 
+            filtered_chunks, 
             key=lambda x: x.combined_score, 
             reverse=True
         )[:limite]

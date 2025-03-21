@@ -1,7 +1,7 @@
 """
 Configurações centralizadas para a aplicação CTA Value Tech.
 """
-import os
+
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 from typing import Optional
@@ -15,6 +15,7 @@ class Settings(BaseSettings):
         APP_VERSION: Versão da aplicação
         DEBUG: Modo de depuração
         DATABASE_URL: URL de conexão com o banco de dados
+        AUTO_INIT_DB: 
         API_KEY_NVIDEA: Chave de API para NVIDIA
         EMBEDDING_MODEL: Modelo de embeddings a ser utilizado
         EMBEDDING_DIMENSION: Dimensão dos embeddings
@@ -25,20 +26,20 @@ class Settings(BaseSettings):
     """
     APP_NAME: str = "CTA Value Tech"
     APP_VERSION: str = "1.0.0"
-    DEBUG: bool = False
+    DEBUG: bool = True
     
     # Database
     DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5433/vectordb"
-    AUTO_INIT_DB: bool = False  # Adicionado
+    AUTO_INIT_DB: bool = False  
     
     # Serviços externos
     API_KEY_NVIDEA: str
-    API_KEY: Optional[str] = None  # Adicionado
+    API_KEY: Optional[str] = None  
     
     # Embeddings
     EMBEDDING_MODEL: str = "intfloat/multilingual-e5-large-instruct"
     EMBEDDING_DIMENSION: int = 1024
-    USE_GPU: bool = False  # Adicionado
+    USE_GPU: bool = True  
     
     # Processamento de texto
     CHUNK_SIZE: int = 800
@@ -55,7 +56,7 @@ class Settings(BaseSettings):
     MAX_RESULTS: int = 5               # Número máximo de resultados na busca
     
     #Logging
-    LOG_LEVEL: str = "INFO"  # Adicionado
+    LOG_LEVEL: str = "INFO"
     
     class Config:
         env_file = ".env"
