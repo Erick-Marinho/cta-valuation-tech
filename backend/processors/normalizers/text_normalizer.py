@@ -59,6 +59,9 @@ def clean_text_for_embedding(text: str) -> str:
     if not text:
         return ""
     
+    # Converter para minúsculas
+    text = text.lower()
+    
     # Normalizar unicode
     text = unicodedata.normalize('NFKC', text)
     

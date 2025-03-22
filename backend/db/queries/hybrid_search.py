@@ -42,7 +42,7 @@ SELECT
 FROM 
     chunks_vetorizados cv
 WHERE 
-    to_tsvector('portuguese', cv.texto) @@ plainto_tsquery('portuguese', %s)
+    to_tsvector('portuguese', lower(cv.texto)) @@ plainto_tsquery('portuguese', %s)
     {filter_clause}
 ORDER BY 
     text_score DESC
@@ -60,11 +60,11 @@ WHERE
 """
 
 def realizar_busca_hibrida(query_text: str, query_embedding: List[float], 
-                         limite: int = 5, alpha: float = 0.7,
-                         filtro_documentos: List[int] = None,
-                         filtro_metadados: Dict[str, Any] = None,
-                         threshold: float = None,
-                         ) -> List[Chunk]:
+                        limite: int = 5, alpha: float = 0.7,
+                        filtro_documentos: List[int] = None,
+                        filtro_metadados: Dict[str, Any] = None,
+                        threshold: float = None,
+                        ) -> List[Chunk]:
     """
     Realiza uma busca híbrida avançada combinando busca vetorial e textual,
     com opções de filtragem por IDs de documentos e metadados.
@@ -83,9 +83,13 @@ def realizar_busca_hibrida(query_text: str, query_embedding: List[float],
     
     settings = get_settings()
     if threshold is None:
-      threshold = settings.SEARCH_THRESHOLD
+        threshold = settings.SEARCH_THRESHOLD
     
     try:
+        
+        # Normalizar a query para busca textual (aplicar lower para busca textual)
+        query_text_lower = query_text.lower()
+        
         # Construir cláusulas de filtro se necessário
         filter_clause = ""
         filter_params_vector = []
@@ -106,7 +110,7 @@ def realizar_busca_hibrida(query_text: str, query_embedding: List[float],
         
         # Parâmetros completos para as consultas
         vector_params = [query_embedding] + filter_params_vector + [query_embedding, 20]
-        text_params = [query_text, query_text] + filter_params_text + [20]
+        text_params = [query_text_lower, query_text_lower] + filter_params_text + [20]
         
         # Executar consulta vetorial
         vector_query = VECTOR_SEARCH_QUERY.format(

@@ -31,6 +31,9 @@ backend/documents/
 **/.venv/
 **/env/
 
+backend/rag-cta-value
+
+
 **/node_modules/
 **/npm-debug.log
 **/yarn-debug.log*

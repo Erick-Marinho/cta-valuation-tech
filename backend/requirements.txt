@@ -1,7 +1,7 @@
 fastapi==0.115.11
 uvicorn==0.34.0
 python-dotenv==1.0.1
-pymupdf==1.23.25  # PyMuPDF para extração de texto de PDFs (substitui PyPDF2)
+pymupdf==1.23.25
 langchain==0.3.20
 langchain-community==0.3.19
 langchain-core==0.3.43
@@ -12,10 +12,8 @@ psycopg2-binary==2.9.10
 openai==1.65.4
 python-multipart==0.0.6
 tiktoken==0.9.0
-pydantic==2.5.2
-pydantic-settings==2.1.0  # Para Settings usando BaseSettings
-psutil==5.9.5  # Para métricas do sistema
-pytest==7.4.0  # Para testes
-pytest-asyncio==0.21.1  # Para testes assíncronos
-httpx==0.25.0  # Para testes de cliente HTTP
+pydantic-settings>=2.4.0,<3.0.0  # Ajustado para atender langchain-community
 psutil==5.9.5
+pytest==7.4.0
+pytest-asyncio==0.21.1
+httpx==0.25.0
