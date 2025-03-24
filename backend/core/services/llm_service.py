@@ -10,6 +10,9 @@ from core.config import get_settings
 from core.exceptions import LLMServiceError
 from utils.logging import track_timing
 
+from langsmith.wrappers import wrap_openai
+from langsmith import traceable
+
 logger = logging.getLogger(__name__)
 
 class LLMService:
@@ -43,16 +46,17 @@ class LLMService:
         """
         try:
             # Cliente para a API da NVIDIA
-            self.client = OpenAI(
+            self.client = wrap_openai(OpenAI(
                 base_url="https://integrate.api.nvidia.com/v1",
                 api_key=self.settings.API_KEY_NVIDEA
-            )
+            ))
             logger.info("Cliente LLM inicializado com sucesso")
         except Exception as e:
             logger.error(f"Erro ao inicializar cliente LLM: {e}")
             raise LLMServiceError(f"Erro ao inicializar cliente LLM: {e}")
     
     @track_timing
+    @traceable # Auto-trace this function with Langsmith
     async def generate_text(self, system_prompt: str, user_prompt: str, 
                           model: str = None, max_tokens: int = 1024, 
                           temperature: float = 0.3) -> str:

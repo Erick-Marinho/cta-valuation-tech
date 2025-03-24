@@ -10,7 +10,6 @@ from .llm_service import get_llm_service
 from db.repositories.chunk_repository import ChunkRepository
 from db.queries.hybrid_search import realizar_busca_hibrida, rerank_results
 from processors.normalizers.text_normalizer import clean_query
-from infra.mlflow.mlflow_utils import experiment_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +33,6 @@ class RAGService:
         self.embedding_service = get_embedding_service()
         self.llm_service = get_llm_service()
     
-    @experiment_tracker.log_query_processing
     async def process_query(self, query: str, 
                            filtro_documentos: Optional[List[int]] = None,
                            max_results: Optional[int] = None,

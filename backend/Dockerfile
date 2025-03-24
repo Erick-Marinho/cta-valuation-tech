@@ -27,14 +27,14 @@ COPY . .
 RUN mkdir -p /app/documents
 
 # Expor a porta da aplicação
-EXPOSE 8001
+EXPOSE 8000
 
 # Criar usuário não privilegiado para executar a aplicação
 RUN adduser --disabled-password --gecos "" appuser && \
     chown -R appuser:appuser /app/documents
 
 # Mudar para o usuário não privilegiado
-USER appuser
+# USER appuser
 
 # Comando para iniciar a aplicação
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

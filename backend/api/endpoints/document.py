@@ -13,9 +13,9 @@ from ..dependencies import validate_api_key, verify_db_health, common_query_para
 
 logger = logging.getLogger(__name__)
 
-# Modelos de dados para requisições e respostas
+# Models de dados para requisições e respostas
 class DocumentResponse(BaseModel):
-    """Modelo para resposta com informações de documento."""
+    """Model para resposta com informações de documento."""
     id: int
     name: str
     file_type: str

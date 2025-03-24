@@ -5,7 +5,7 @@ from nltk.tokenize import sent_tokenize
 
 def clean_text(text):
     """Remove metadados indesejados."""
-    text = re.sub(r"\[Página \d+\]", "", text)  # Remove [Página X]
+    text = re.sub(r"\[Página \d+\]", "", text)  # Remove [Página X ]
     text = re.sub(r"Disponível em:.*", "", text)  # Remove URLs
     return text.strip()
 

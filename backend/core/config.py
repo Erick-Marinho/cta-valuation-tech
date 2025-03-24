@@ -5,6 +5,7 @@ import os
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 from typing import Optional
+from pydantic import Field
 
 class Settings(BaseSettings):
     """
@@ -53,6 +54,13 @@ class Settings(BaseSettings):
     TEXT_SEARCH_WEIGHT: float = 0.3    # Complemento do peso vetorial
     SEARCH_THRESHOLD: float = 0.6      # Limiar mínimo de similaridade
     MAX_RESULTS: int = 5               # Número máximo de resultados na busca
+
+    # LANGSMITH
+    LANGSMITH_TRACING: str = Field(default="false")
+    LANGSMITH_ENDPOINT: str = Field(default="https://api.smith.langchain.com")
+    LANGSMITH_API_KEY: str = Field(default="")
+    LANGSMITH_PROJECT: str = Field(default="default")
+    OPENAI_API_KEY: str = Field(default="")
     
     #Logging
     LOG_LEVEL: str = "INFO"  # Adicionado
