@@ -1,14 +1,23 @@
-FROM node:22-alpine
+FROM node:20-alpine
 
+# Configurar diretório de trabalho
 WORKDIR /app
 
-COPY package*.json ./
+# Copiar apenas os arquivos de dependências
+COPY package.json ./
 
-RUN npm install -g pnpm
-RUN pnpm install
+# Instalar dependências
+RUN npm install
 
+# Copiar o restante do código
 COPY . .
 
+# Definir variável para habilitar polling do sistema de arquivos
+ENV WATCHPACK_POLLING=true
+ENV CHOKIDAR_USEPOLLING=true
+
+# Expor porta
 EXPOSE 3000
 
-CMD ["pnpm", "run", "dev"]
+# Iniciar aplicação em desenvolvimento
+CMD ["npm", "run", "dev"]

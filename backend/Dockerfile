@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.11.5-slim
 
 WORKDIR /app
 
@@ -6,6 +6,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     gcc \
     libpq-dev \
+    curl \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -20,11 +21,11 @@ COPY requirements.txt .
 # Instalar dependências Python
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar o código da aplicação
-COPY . .
-
 # Criar diretório para arquivos processados
 RUN mkdir -p /app/documents
+
+# Copiar o código da aplicação
+COPY . .
 
 # Expor a porta da aplicação
 EXPOSE 8000
@@ -35,6 +36,10 @@ RUN adduser --disabled-password --gecos "" appuser && \
 
 # Mudar para o usuário não privilegiado
 USER appuser
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:8000/health/ping || exit 1
 
 # Comando para iniciar a aplicação
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

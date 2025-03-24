@@ -5,6 +5,7 @@ Configurações centralizadas para a aplicação CTA Value Tech.
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 from typing import Optional
+import os
 
 class Settings(BaseSettings):
     """
@@ -15,7 +16,7 @@ class Settings(BaseSettings):
         APP_VERSION: Versão da aplicação
         DEBUG: Modo de depuração
         DATABASE_URL: URL de conexão com o banco de dados
-        AUTO_INIT_DB: 
+        AUTO_INIT_DB: Inicialização automática do banco de dados
         API_KEY_NVIDEA: Chave de API para NVIDIA
         EMBEDDING_MODEL: Modelo de embeddings a ser utilizado
         EMBEDDING_DIMENSION: Dimensão dos embeddings
@@ -29,24 +30,28 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     
     # Database
-    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5433/vectordb"
-    AUTO_INIT_DB: bool = False  
+    # Verifica se está rodando em Docker ou localhost
+    DATABASE_URL: str = os.environ.get(
+        "DATABASE_URL", 
+        "postgresql://postgres:postgres@localhost:5433/vectordb"
+    )
+    AUTO_INIT_DB: bool = os.environ.get("AUTO_INIT_DB", "False").lower() == "true"
     
     # Serviços externos
-    API_KEY_NVIDEA: str
-    API_KEY: Optional[str] = None  
+    API_KEY_NVIDEA: str = os.environ.get("API_KEY_NVIDEA", "")
+    API_KEY: Optional[str] = os.environ.get("API_KEY", None)
     
     # Embeddings
     EMBEDDING_MODEL: str = "intfloat/multilingual-e5-large-instruct"
     EMBEDDING_DIMENSION: int = 1024
-    USE_GPU: bool = True  
+    USE_GPU: bool = os.environ.get("USE_GPU", "False").lower() == "true"
     
     # Processamento de texto
     CHUNK_SIZE: int = 800
     CHUNK_OVERLAP: int = 100
     
     # Servidor
-    PORT: int = 8000
+    PORT: int = int(os.environ.get("PORT", "8000"))
     CORS_ORIGINS: list = ["*"]
     
     # RAG

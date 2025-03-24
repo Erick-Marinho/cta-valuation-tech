@@ -55,6 +55,7 @@ export default function ProducteFeature() {
 						onMouseLeave={() => {
 							if (selectedTab === 'diagnosticoSustentavel') setExpandido(false);
 						}}
+						className='data-[state=active]:text-white data-[state=inactive]:text-[#222228]'
 					>
 						Diagnóstico sustentável
 					</TabsTrigger>
@@ -67,6 +68,7 @@ export default function ProducteFeature() {
 						onMouseLeave={() => {
 							if (selectedTab === 'calculoRoyalties') setExpandido(false);
 						}}
+						className='data-[state=active]:text-white data-[state=inactive]:text-[#222228]'
 					>
 						Cálculo de royalties
 					</TabsTrigger>
@@ -79,6 +81,7 @@ export default function ProducteFeature() {
 						onMouseLeave={() => {
 							if (selectedTab === 'gestaoEsg') setExpandido(false);
 						}}
+						className='data-[state=active]:text-white data-[state=inactive]:text-[#222228]'
 					>
 						Gestão ESG
 					</TabsTrigger>
@@ -91,6 +94,7 @@ export default function ProducteFeature() {
 						onMouseLeave={() => {
 							if (selectedTab === 'parceriasComerciais') setExpandido(false);
 						}}
+						className='data-[state=active]:text-white data-[state=inactive]:text-[#222228]'
 					>
 						Parcerias comerciais
 					</TabsTrigger>
@@ -103,6 +107,7 @@ export default function ProducteFeature() {
 						onMouseLeave={() => {
 							if (selectedTab === 'impactoSocioambiental') setExpandido(false);
 						}}
+						className='data-[state=active]:text-white data-[state=inactive]:text-[#222228]'
 					>
 						Impacto socioambiental
 					</TabsTrigger>
@@ -115,6 +120,7 @@ export default function ProducteFeature() {
 						onMouseLeave={() => {
 							if (selectedTab === 'reparticaobeneficios') setExpandido(false);
 						}}
+						className='data-[state=active]:text-white data-[state=inactive]:text-[#222228]'
 					>
 						Repartição de benefícios
 					</TabsTrigger>
