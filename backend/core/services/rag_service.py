@@ -10,6 +10,12 @@ from .llm_service import get_llm_service
 from db.repositories.chunk_repository import ChunkRepository
 from db.queries.hybrid_search import realizar_busca_hibrida, rerank_results
 from processors.normalizers.text_normalizer import clean_query
+from core.metrics import (
+    RAG_QUERY_COUNTER,
+    RAG_QUERY_LATENCY,
+    RAG_CHUNKS_RETRIEVED,
+    MetricsTimer
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,89 +57,97 @@ class RAGService:
         Returns:
             dict: Resposta gerada e informações de depuração (se solicitado)
         """
-        start_time = time.time()
-        
-        try:
-            # 1. Preparar e limpar a consulta
-            clean_query_text = clean_query(query)
-            if not clean_query_text:
-                return {"response": "Não entendi sua consulta. Pode reformulá-la?"}
-            
-            # 2. Gerar embedding da consulta
-            query_embedding = self.embedding_service.embed_text(clean_query_text)
-            
-            # 3. Recuperar documentos relevantes
-            alpha = vector_weight if vector_weight is not None else self.settings.VECTOR_SEARCH_WEIGHT
-            limit = max_results if max_results is not None else self.settings.MAX_RESULTS
-            
-            retrieved_chunks = realizar_busca_hibrida(
-                query_text=clean_query_text,
-                query_embedding=query_embedding,
-                limite=limit,
-                alpha=alpha,
-                filtro_documentos=filtro_documentos
-            )
-            
-            # 4. Reranking para melhorar a relevância
-            ranked_chunks = rerank_results(retrieved_chunks, clean_query_text)
-            
-            # 5. Preparar contexto para o LLM
-            context = ""
-            
-            if not ranked_chunks:
-                logger.warning(f"Nenhum documento relevante encontrado para a consulta: '{query}'")
-                context = "Não foram encontrados documentos relevantes para esta consulta específica."
-            else:
-                for i, chunk in enumerate(ranked_chunks):
-                    context += f"Contexto {i+1} [relevância: {chunk.combined_score:.2f}]\n{chunk.texto}\n\n"
-            
-            # 6. Construir o prompt para o LLM
-            system_prompt = f"""Você é um assistente especializado em valoração de tecnologias relacionadas ao Patrimônio Genético Nacional e Conhecimentos Tradicionais Associados.
+        with MetricsTimer(RAG_QUERY_LATENCY):
+            try:
+                # 1. Preparar e limpar a consulta
+                clean_query_text = clean_query(query)
+                if not clean_query_text:
+                    RAG_QUERY_COUNTER.labels(status="error").inc()
+                    return {"response": "Não entendi sua consulta. Pode reformulá-la?"}
+                
+                # 2. Gerar embedding da consulta
+                query_embedding = self.embedding_service.embed_text(clean_query_text)
+                
+                # 3. Recuperar documentos relevantes
+                alpha = vector_weight if vector_weight is not None else self.settings.VECTOR_SEARCH_WEIGHT
+                limit = max_results if max_results is not None else self.settings.MAX_RESULTS
+                
+                retrieved_chunks = realizar_busca_hibrida(
+                    query_text=clean_query_text,
+                    query_embedding=query_embedding,
+                    limite=limit,
+                    alpha=alpha,
+                    filtro_documentos=filtro_documentos
+                )
+                
+                # Registrar número de chunks recuperados
+                RAG_CHUNKS_RETRIEVED.observe(len(retrieved_chunks))
+                
+                # 4. Reranking para melhorar a relevância
+                ranked_chunks = rerank_results(retrieved_chunks, clean_query_text)
+                
+                # 5. Preparar contexto para o LLM
+                context = ""
+                
+                if not ranked_chunks:
+                    logger.warning(f"Nenhum documento relevante encontrado para a consulta: '{query}'")
+                    context = "Não foram encontrados documentos relevantes para esta consulta específica."
+                else:
+                    for i, chunk in enumerate(ranked_chunks):
+                        context += f"Contexto {i+1} [relevância: {chunk.combined_score:.2f}]\n{chunk.texto}\n\n"
+                
+                # 6. Construir o prompt para o LLM
+                system_prompt = f"""Você é um assistente especializado em valoração de tecnologias relacionadas ao Patrimônio Genético Nacional e Conhecimentos Tradicionais Associados.
 
-Responda à pergunta do usuário usando as informações fornecidas nos documentos do contexto. Cada contexto tem uma pontuação de relevância associada a ele - contextos com pontuação mais alta são mais relevantes para a pergunta do usuário.
+                Responda à pergunta do usuário usando as informações fornecidas nos documentos do contexto. Cada contexto tem uma pontuação de relevância associada a ele - contextos com pontuação mais alta são mais relevantes para a pergunta do usuário.
 
-IMPORTANTE: Não mencione os "contextos" ou "documentos" na sua resposta. O usuário não sabe que você está consultando diferentes fontes. Apresente a informação de forma natural e fluida.
+                IMPORTANTE: Não mencione os "contextos" ou "documentos" na sua resposta. O usuário não sabe que você está consultando diferentes fontes. Apresente a informação de forma natural e fluida.
 
-Se realmente não houver informações suficientes nos contextos para responder adequadamente, você pode indicar isso de forma sutil, sugerindo que há limitações nas informações disponíveis, mas tente sempre fornecer valor com o que você tem.
+                Se realmente não houver informações suficientes nos contextos para responder adequadamente, você pode indicar isso de forma sutil, sugerindo que há limitações nas informações disponíveis, mas tente sempre fornecer valor com o que você tem.
 
-As respostas devem ser em português brasileiro formal, mantendo a terminologia técnica apropriada ao tema de biodiversidade, conhecimentos tradicionais e propriedade intelectual.
-"""
-            
-            # 7. Gerar resposta com o LLM
-            llm_input = f"Documentos:\n{context}\n\nPergunta: {query}"
-            
-            response = await self.llm_service.generate_text(
-                system_prompt=system_prompt,
-                user_prompt=llm_input
-            )
-            
-            # 8. Preparar resultado
-            processing_time = time.time() - start_time
-            
-            result = {
-                "response": response,
-                "processing_time": processing_time
-            }
-            
-            # Adicionar informações de depuração se solicitado
-            if include_debug_info:
-                debug_info = {
-                    "query": query,
-                    "clean_query": clean_query_text,
-                    "num_results": len(ranked_chunks),
-                    "sources": [chunk.arquivo_origem for chunk in ranked_chunks],
-                    "scores": [round(chunk.combined_score, 3) for chunk in ranked_chunks]
+                As respostas devem ser em português brasileiro formal, mantendo a terminologia técnica apropriada ao tema de biodiversidade, conhecimentos tradicionais e propriedade intelectual.
+                """
+                
+                # 7. Gerar resposta com o LLM
+                llm_input = f"Documentos:\n{context}\n\nPergunta: {query}"
+                
+                response = await self.llm_service.generate_text(
+                    system_prompt=system_prompt,
+                    user_prompt=llm_input
+                )
+                
+                # 8. Preparar resultado
+                processing_time = time.time() - start_time
+                
+                result = {
+                    "response": response,
+                    "processing_time": processing_time
                 }
-                result["debug_info"] = debug_info
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Erro ao processar consulta RAG: {str(e)}", exc_info=True)
-            return {
-                "response": "Desculpe, ocorreu um erro ao processar sua consulta. Por favor, tente novamente.",
-                "error": str(e)
-            }
+                
+                # Adicionar informações de depuração se solicitado
+                if include_debug_info:
+                    debug_info = {
+                        "query": query,
+                        "clean_query": clean_query_text,
+                        "num_results": len(ranked_chunks),
+                        "sources": [chunk.arquivo_origem for chunk in ranked_chunks],
+                        "scores": [round(chunk.combined_score, 3) for chunk in ranked_chunks]
+                    }
+                    result["debug_info"] = debug_info
+                
+                # Registrar sucesso
+                RAG_QUERY_COUNTER.labels(status="success").inc()
+                
+                return result
+                
+            except Exception as e:
+                logger.error(f"Erro ao processar consulta RAG: {str(e)}", exc_info=True)
+                # Registrar erro
+                RAG_QUERY_COUNTER.labels(status="error").inc()
+                return {
+                    "response": "Desculpe, ocorreu um erro ao processar sua consulta. Por favor, tente novamente.",
+                    "error": str(e)
+                }
     
     def get_similar_questions(self, query: str, limit: int = 5) -> List[str]:
         """

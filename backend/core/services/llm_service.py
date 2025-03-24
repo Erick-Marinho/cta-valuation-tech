@@ -6,9 +6,16 @@ import logging
 import time
 from typing import Dict, Any, List, Optional
 from openai import OpenAI
+from backend.core.factory.model_client_factory import ModelClientFactory
 from core.config import get_settings
 from core.exceptions import LLMServiceError
 from utils.logging import track_timing
+from core.metrics import (
+    LLM_REQUEST_COUNTER,
+    LLM_REQUEST_LATENCY,
+    LLM_TOKEN_COUNTER,
+    MetricsTimer
+)
 
 from langsmith.wrappers import wrap_openai
 from langsmith import traceable
@@ -31,7 +38,8 @@ class LLMService:
         Inicializa o serviço de LLM.
         """
         self.settings = get_settings()
-        self._initialize_client()
+        # self._initialize_client()
+        self.client = ModelClientFactory._initialize_client("nvidia", self.settings)
         self._metrics = {
             "requests_total": 0,
             "tokens_input_total": 0,
@@ -40,20 +48,20 @@ class LLMService:
             "avg_response_time": 0
         }
     
-    def _initialize_client(self):
-        """
-        Inicializa o cliente para a API de LLM.
-        """
-        try:
-            # Cliente para a API da NVIDIA
-            self.client = wrap_openai(OpenAI(
-                base_url="https://integrate.api.nvidia.com/v1",
-                api_key=self.settings.API_KEY_NVIDEA
-            ))
-            logger.info("Cliente LLM inicializado com sucesso")
-        except Exception as e:
-            logger.error(f"Erro ao inicializar cliente LLM: {e}")
-            raise LLMServiceError(f"Erro ao inicializar cliente LLM: {e}")
+    # def _initialize_client(self):
+    #     """
+    #     Inicializa o cliente para a API de LLM.
+    #     """
+    #     try:
+    #         # Cliente para a API da NVIDIA
+    #         self.client = wrap_openai(OpenAI(
+    #             base_url="https://integrate.api.nvidia.com/v1",
+    #             api_key=self.settings.API_KEY_NVIDEA
+    #         ))
+    #         logger.info("Cliente LLM inicializado com sucesso")
+    #     except Exception as e:
+    #         logger.error(f"Erro ao inicializar cliente LLM: {e}")
+    #         raise LLMServiceError(f"Erro ao inicializar cliente LLM: {e}")
     
     @track_timing
     @traceable # Auto-trace this function with Langsmith
@@ -77,14 +85,9 @@ class LLMService:
             model = "meta/llama3-70b-instruct"  # Modelo padrão
         
         try:
-            start_time = time.time()
-            
-            # Registrar uso
-            self._metrics["requests_total"] += 1
-            
             # Estimar tokens de entrada (aproximação simples)
             input_tokens = len(system_prompt.split()) + len(user_prompt.split())
-            self._metrics["tokens_input_total"] += input_tokens
+            LLM_TOKEN_COUNTER.labels(type="input").inc(input_tokens)
             
             # Preparar mensagens
             messages = [
@@ -93,40 +96,35 @@ class LLMService:
             ]
             
             # Chamar a API
-            response = self.client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=0.9,
-                frequency_penalty=0.3,
-                presence_penalty=0.2,
-                stream=False
-            )
+            with MetricsTimer(LLM_REQUEST_LATENCY):
+                response = self.client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=0.9,
+                    frequency_penalty=0.3,
+                    presence_penalty=0.2,
+                    stream=False
+                )
             
             # Extrair resposta
             result = response.choices[0].message.content
             
             # Estimar tokens de saída (aproximação simples)
             output_tokens = len(result.split())
-            self._metrics["tokens_output_total"] += output_tokens
+            LLM_TOKEN_COUNTER.labels(type="output").inc(output_tokens)
             
-            # Calcular média de tempo de resposta
-            elapsed_time = time.time() - start_time
-            total_requests = self._metrics["requests_total"]
-            current_avg = self._metrics["avg_response_time"]
+            # Registrar sucesso
+            LLM_REQUEST_COUNTER.labels(status="success", model=model).inc()
             
-            # Atualizar média de tempo de resposta
-            self._metrics["avg_response_time"] = (
-                (current_avg * (total_requests - 1) + elapsed_time) / total_requests
-            )
-            
-            logger.info(f"Geração de texto concluída em {elapsed_time:.2f}s, {output_tokens} tokens gerados")
+            logger.info(f"Geração de texto concluída, {output_tokens} tokens gerados")
             
             return result
             
         except Exception as e:
-            self._metrics["errors_total"] += 1
+            # Registrar erro
+            LLM_REQUEST_COUNTER.labels(status="error", model=model).inc()
             logger.error(f"Erro ao gerar texto com LLM: {e}")
             raise LLMServiceError(f"Erro ao gerar texto: {e}")
     

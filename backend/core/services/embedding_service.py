@@ -6,6 +6,13 @@ from typing import List, Dict, Any, Optional
 from langchain_huggingface import HuggingFaceEmbeddings
 from core.config import get_settings
 from processors.normalizers.text_normalizer import clean_text_for_embedding
+from core.metrics import (
+    EMBEDDING_GENERATION_COUNTER,
+    EMBEDDING_GENERATION_LATENCY,
+    CACHE_OPERATIONS,
+    CACHE_SIZE,
+    MetricsTimer
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +37,9 @@ class EmbeddingService:
         self._cache_misses = 0
         self._total_embeddings = 0
         self._initialize_model()
+        
+        # Inicializar métrica de tamanho do cache
+        CACHE_SIZE.labels(type="embeddings").set(0)
         
     def _initialize_model(self):
         """
@@ -84,19 +94,22 @@ class EmbeddingService:
         # Verificar no cache
         cache_key = hash(clean_text)
         if cache_key in self._cache:
-            self._cache_hits += 1
+            CACHE_OPERATIONS.labels(operation="get", status="hit").inc()
             return self._cache[cache_key]
         
         # Caso não esteja no cache, gerar embedding
+        CACHE_OPERATIONS.labels(operation="get", status="miss").inc()
+        
         try:
-            self._cache_misses += 1
-            self._total_embeddings += 1
-            
-            embedding = self.model.embed_query(clean_text)
+            with MetricsTimer(EMBEDDING_GENERATION_LATENCY):
+                embedding = self.model.embed_query(clean_text)
+                EMBEDDING_GENERATION_COUNTER.labels(type="query").inc()
             
             # Adicionar ao cache se não for muito grande
             if len(self._cache) < 10000:  # Limitar tamanho do cache
                 self._cache[cache_key] = embedding
+                CACHE_OPERATIONS.labels(operation="set", status="success").inc()
+                CACHE_SIZE.labels(type="embeddings").set(len(self._cache))
             
             return embedding
             
@@ -130,17 +143,18 @@ class EmbeddingService:
             cache_key = hash(clean_text)
             if cache_key in self._cache:
                 embeddings.append(self._cache[cache_key])
-                self._cache_hits += 1
+                CACHE_OPERATIONS.labels(operation="get", status="hit").inc()
             else:
                 texts_to_embed.append(clean_text)
                 indices_to_embed.append(i)
-                self._cache_misses += 1
+                CACHE_OPERATIONS.labels(operation="get", status="miss").inc()
         
         # Gerar embeddings para textos que não estão no cache
         if texts_to_embed:
             try:
-                new_embeddings = self.model.embed_documents(texts_to_embed)
-                self._total_embeddings += len(texts_to_embed)
+                with MetricsTimer(EMBEDDING_GENERATION_LATENCY):
+                    new_embeddings = self.model.embed_documents(texts_to_embed)
+                    EMBEDDING_GENERATION_COUNTER.labels(type="chunk").inc(len(texts_to_embed))
                 
                 # Adicionar novos embeddings ao cache
                 for i, embedding in enumerate(new_embeddings):
@@ -148,6 +162,10 @@ class EmbeddingService:
                     cache_key = hash(clean_text)
                     if len(self._cache) < 10000:  # Limitar tamanho do cache
                         self._cache[cache_key] = embedding
+                        CACHE_OPERATIONS.labels(operation="set", status="success").inc()
+                
+                # Atualizar tamanho do cache
+                CACHE_SIZE.labels(type="embeddings").set(len(self._cache))
                 
                 # Inserir os novos embeddings na posição correta
                 for i, embedding in zip(indices_to_embed, new_embeddings):
@@ -188,6 +206,7 @@ class EmbeddingService:
         Limpa o cache de embeddings.
         """
         self._cache.clear()
+        CACHE_SIZE.labels(type="embeddings").set(0)
         logger.info("Cache de embeddings limpo")
 
 # Instância singleton para uso em toda a aplicação

@@ -5,6 +5,7 @@ import uvicorn
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette_prometheus import PrometheusMiddleware, metrics
 
 # Importações dos módulos da aplicação
 from core.config import get_settings
@@ -36,6 +37,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Adicionar middleware do Prometheus
+app.add_middleware(PrometheusMiddleware)
+app.add_route("/metrics", metrics)
 
 # Inicializar banco de dados na inicialização
 @app.on_event("startup")
