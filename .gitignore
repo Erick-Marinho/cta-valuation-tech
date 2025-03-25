@@ -1,16 +1,23 @@
+# Environment variables - ignore all except examples
 **/.env
 **/.env.*
 !**/.env.example
+!**/env.example
 
-
+# Project-specific directories
 backend/documents/
+backend/rag-cta-value
 
+# Python
 **/__pycache__/
 **/*.py[cod]
 **/*$py.class
 **/*.so
 **/.Python
 **/env/
+**/venv/
+**/.venv/
+**/ENV/
 **/build/
 **/develop-eggs/
 **/dist/
@@ -25,44 +32,78 @@ backend/documents/
 **/*.egg-info/
 **/.installed.cfg
 **/*.egg
+**/.pytest_cache/
+**/pytest.xml
+**/htmlcov/
+**/.coverage
+**/.coverage.*
 
-**/venv/
-**/ENV/
-**/.venv/
-**/env/
-
+# Node.js/Frontend
 **/node_modules/
-**/npm-debug.log
+**/npm-debug.log*
 **/yarn-debug.log*
 **/yarn-error.log*
 **/.pnpm-debug.log*
-**/.nuxt
-**/.next
+**/.yarn/*
+!**/.yarn/patches
+!**/.yarn/plugins
+!**/.yarn/releases
+!**/.yarn/versions
+**/.pnp.*
+**/.nuxt/
+**/.next/
 **/out/
 **/.cache/
 **/dist/
 **/build/
 **/coverage/
+**/.turbo
 
-**/.DS_Store
-**/Thumbs.db
-
-**/*.log
-**/*.swp
-**/*.swo
-**/.~*
-**/*.tmp
-**/*.bak
-
+# Editor/IDE
 **/.idea/
-**/.vscode/
+**/.vscode/*
+!**/.vscode/extensions.json
+!**/.vscode/settings.json.example
 **/*.sublime-project
 **/*.sublime-workspace
 **/.project
 **/.pydevproject
 **/.settings/
+**/.classpath
+**/.factorypath
 
+# OS generated files
+**/.DS_Store
+**/.DS_Store?
+**/._*
+**/.Spotlight-V100
+**/.Trashes
+**/ehthumbs.db
+**/Thumbs.db
+
+# Logs and databases
+**/*.log
 **/*.sqlite
 **/*.db
 **/*.db-shm
 **/*.db-wal
+
+# Temporary files
+**/*.swp
+**/*.swo
+**/.~*
+**/*.tmp
+**/*.bak
+**/*.orig
+**/tmp/
+**/temp/
+
+# Vercel
+**/.vercel
+
+# TypeScript
+**/*.tsbuildinfo
+**/next-env.d.ts
+
+# Docker
+**/.docker/data/

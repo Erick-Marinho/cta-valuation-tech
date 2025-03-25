@@ -2,9 +2,10 @@
 Queries especializadas para busca híbrida (combinação de busca vetorial e textual).
 """
 import logging
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from ..connection import execute_query, execute_query_single_result
 from ..models.chunk import Chunk
+from core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +37,12 @@ SELECT
     cv.pagina, 
     cv.posicao, 
     cv.metadados,
-    ts_rank_cd(to_tsvector('portuguese', cv.texto), plainto_tsquery('portuguese', %s)) as text_score,
+    ts_rank_cd(to_tsvector('portuguese', cv.texto), plainto_tsquery('portuguese', lower(%s))) as text_score,
     (SELECT nome_arquivo FROM documentos_originais WHERE id = cv.documento_id) as arquivo_origem
 FROM 
     chunks_vetorizados cv
 WHERE 
-    to_tsvector('portuguese', cv.texto) @@ plainto_tsquery('portuguese', %s)
+    to_tsvector('portuguese', lower(cv.texto)) @@ plainto_tsquery('portuguese', lower(%s))
     {filter_clause}
 ORDER BY 
     text_score DESC
@@ -59,9 +60,11 @@ WHERE
 """
 
 def realizar_busca_hibrida(query_text: str, query_embedding: List[float], 
-                         limite: int = 5, alpha: float = 0.7,
-                         filtro_documentos: List[int] = None,
-                         filtro_metadados: Dict[str, Any] = None) -> List[Chunk]:
+                        limite: int = 3, alpha: float = 0.7,
+                        filtro_documentos: List[int] = None,
+                        filtro_metadados: Dict[str, Any] = None,
+                        threshold: float = None,
+                        ) -> List[Chunk]:
     """
     Realiza uma busca híbrida avançada combinando busca vetorial e textual,
     com opções de filtragem por IDs de documentos e metadados.
@@ -77,7 +80,13 @@ def realizar_busca_hibrida(query_text: str, query_embedding: List[float],
     Returns:
         list: Lista de chunks ordenados por score combinado
     """
+    
+    settings = get_settings()
+    if threshold is None:
+        threshold = settings.SEARCH_THRESHOLD
+    
     try:
+        
         # Construir cláusulas de filtro se necessário
         filter_clause = ""
         filter_params_vector = []
@@ -144,20 +153,30 @@ def realizar_busca_hibrida(query_text: str, query_embedding: List[float],
                 chunk.similarity_score = similarity_score
                 combined_results[chunk_id] = chunk
         
-        # Calcular scores combinados
+        #Calcular scores combinados
         for chunk in combined_results.values():
             # Normalizar text_score
             norm_text_score = min(chunk.text_score, 1.0)
             
-            # Combinar scores
+        #     # Combinar scores
             chunk.combined_score = alpha * chunk.similarity_score + (1 - alpha) * norm_text_score
+        
+        # Filtro de threshold    
+        filtered_chunks = [chunk for chunk in combined_results.values()
+                           if chunk.combined_score >= threshold]    
         
         # Ordenar e limitar resultados
         sorted_chunks = sorted(
-            combined_results.values(), 
+            filtered_chunks, 
             key=lambda x: x.combined_score, 
             reverse=True
         )[:limite]
+        
+        logger.info(f"Query text: '{query_text}'")
+        logger.info(f"Resultados antes do filtro de threshold: {len(combined_results)}")
+        logger.info(f"Threshold aplicado: {threshold}")
+        logger.info(f"Resultados após filtro de threshold: {len(filtered_chunks)}")
+        logger.info(f"Resultado variavel: {limite}")
         
         # Logar informações sobre a busca para depuração
         logger.debug(f"Busca híbrida por '{query_text}' retornou {len(sorted_chunks)} resultados")
@@ -170,6 +189,7 @@ def realizar_busca_hibrida(query_text: str, query_embedding: List[float],
     except Exception as e:
         logger.error(f"Erro na busca híbrida avançada: {e}")
         return []
+
 
 def rerank_results(chunks: List[Chunk], query_text: str) -> List[Chunk]:
     """

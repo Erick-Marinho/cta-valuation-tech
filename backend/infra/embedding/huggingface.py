@@ -16,8 +16,13 @@ class HuggingFaceEmbeddingAdapter:
     proporcionando uma interface consistente independente da implementação.
     """
     
+<<<<<<< HEAD
     def __init__(self, model_name: str = get_settings().EMBEDDING_MODEL, 
                 device: str = "cpu", normalize: bool = True):
+=======
+    def __init__(self, model_name: str = "intfloat/multilingual-e5-large-instruct", 
+                device: str = "cuda", normalize: bool = True):
+>>>>>>> dev-marinho
         """
         Inicializa o adaptador de embeddings.
         
