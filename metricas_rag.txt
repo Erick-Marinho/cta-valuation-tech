@@ -1,0 +1,93 @@
+# Métricas do Sistema RAG
+
+## 1. Métricas do RAG
+# Contadores de consultas
+rag_queries_total{status="success"}
+rag_queries_total{status="error"}
+
+# Duração das consultas
+rag_query_duration_seconds_count
+rag_query_duration_seconds_sum
+rag_query_duration_seconds_bucket
+
+# Chunks recuperados
+rag_chunks_retrieved_count
+rag_chunks_retrieved_sum
+rag_chunks_retrieved_bucket
+
+## 2. Métricas de Embeddings
+# Geração de embeddings
+embedding_generations_total{type="query"}
+embedding_generations_total{type="chunk"}
+
+# Duração da geração
+embedding_generation_duration_seconds_count
+embedding_generation_duration_seconds_sum
+embedding_generation_duration_seconds_bucket
+
+# Cache
+cache_operations_total{operation="get",status="hit"}
+cache_operations_total{operation="get",status="miss"}
+cache_operations_total{operation="set",status="success"}
+cache_size{type="embeddings"}
+
+## 3. Métricas do LLM
+# Requisições
+llm_requests_total{status="success",model="..."}
+llm_requests_total{status="error",model="..."}
+
+# Duração das requisições
+llm_request_duration_seconds_count
+llm_request_duration_seconds_sum
+llm_request_duration_seconds_bucket
+
+# Tokens
+llm_tokens_total{type="input"}
+llm_tokens_total{type="output"}
+
+## 4. Métricas de Documentos
+# Processamento de documentos
+document_processing_total{status="success",type="pdf"}
+document_processing_total{status="error",type="pdf"}
+
+# Duração do processamento
+document_processing_duration_seconds_count
+document_processing_duration_seconds_sum
+document_processing_duration_seconds_bucket
+
+# Chunks por documento
+chunks_per_document_count
+chunks_per_document_sum
+chunks_per_document_bucket
+
+## 5. Métricas do Sistema FastAPI (automáticas)
+# Requisições HTTP
+http_requests_total{method="GET",status="200"}
+http_requests_total{method="POST",status="200"}
+
+# Duração das requisições
+http_request_duration_seconds_count
+http_request_duration_seconds_sum
+http_request_duration_seconds_bucket
+
+## Exemplos de Queries PromQL Úteis
+
+# Taxa de sucesso do RAG nos últimos 5 minutos
+rate(rag_queries_total{status="success"}[5m]) / sum(rate(rag_queries_total[5m]))
+
+# Tempo médio de resposta
+rate(rag_query_duration_seconds_sum[5m]) / rate(rag_query_duration_seconds_count[5m])
+
+# Taxa de acerto do cache
+sum(rate(cache_operations_total{status="hit"}[5m])) / sum(rate(cache_operations_total{operation="get"}[5m]))
+
+# Tokens processados por minuto
+rate(llm_tokens_total[1m])
+
+# Latência média das requisições HTTP
+rate(http_request_duration_seconds_sum[5m]) / rate(http_request_duration_seconds_count[5m])
+
+## Observações:
+- Para métricas do tipo Histogram (_bucket), existem diferentes buckets de latência configurados
+- Todas as métricas podem ser combinadas usando PromQL para visualizações mais complexas
+- As métricas podem ser visualizadas no Prometheus (http://localhost:9090) ou no Grafana (http://localhost:3000) 

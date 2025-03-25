@@ -19,7 +19,9 @@ CREATE TABLE IF NOT EXISTS chunks_vetorizados (
     embedding vector(1024),
     pagina INTEGER,
     posicao INTEGER,
-    metadados JSONB
+    metadados JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Índice para busca vetorial mais rápida

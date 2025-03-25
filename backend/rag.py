@@ -1,148 +1,156 @@
+#!/usr/bin/env python
+"""
+Ferramenta de linha de comando para migração e teste de documentos.
+
+Este script permite importar documentos para o banco de dados e testar buscas,
+utilizando a arquitetura modular da aplicação.
+"""
 import os
-import PyPDF2
+import argparse
+import logging
+import asyncio
 import dotenv
 from os import listdir
 from os.path import isfile, join, isdir
-import psycopg2
-from psycopg2.extras import Json, DictCursor
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
 
-from utils.createJSON import create_json_from_chunks
+# Importar componentes da arquitetura modular
+from core.config import get_settings
+from core.services.document_service import get_document_service
+from core.services.embedding_service import get_embedding_service
+from core.services.rag_service import get_rag_service
+from db.schema import setup_database, is_database_healthy
+from utils.logging import configure_logging
 
-from db.db import conectar_bd, criar_tabelas
-from services import getChunks
-
+# Carregar variáveis de ambiente
 dotenv.load_dotenv()
 
-# Configuração do modelo de embeddings
-model_name = "intfloat/multilingual-e5-large-instruct"
-model_kwargs = {"device": "cpu"}
-encode_kwargs = {"normalize_embeddings": True}
-hf = HuggingFaceEmbeddings(model_name=model_name, model_kwargs=model_kwargs, encode_kwargs=encode_kwargs)
+# Configurar logging
+configure_logging()
+logger = logging.getLogger(__name__)
 
-def lista_arquivos(dir):
+def lista_arquivos(dir_path):
     """Listar todos os arquivos em um diretório e seus subdiretórios."""
     arquivos_list = []
 
-    for item in listdir(dir):
-        if isfile(join(dir, item)):
-            arquivos_list.append(join(dir, item))
-        elif isdir(join(dir, item)):
-            arquivos_list += lista_arquivos(join(dir, item))
+    for item in listdir(dir_path):
+        item_path = join(dir_path, item)
+        if isfile(item_path):
+            arquivos_list.append(item_path)
+        elif isdir(item_path):
+            arquivos_list += lista_arquivos(item_path)
     return arquivos_list
-  
-def limpar_texto(texto):
-    """Limpa o texto para evitar problemas com caracteres especiais."""
-    if texto is None:
-        return ""
-    texto_limpo = texto.replace("\x00", "")
-    return texto_limpo
 
-def processar_arquivo(arquivo_path):
-    """Processa um arquivo PDF e retorna seu conteúdo binário e chunks de texto."""
-    try:
-        # Ler o arquivo binário
-        with open(arquivo_path, 'rb') as file:
-            conteudo_binario = file.read()
-        
-        # Extrair texto do PDF
-        conteudo_texto = ""
-        if arquivo_path.endswith(".pdf"):
-            read = PyPDF2.PdfReader(arquivo_path)
-            for page in read.pages:
-                texto_pagina = page.extract_text()
-                if texto_pagina:
-                    texto_pagina = limpar_texto(texto_pagina)
-                    conteudo_texto += " " + texto_pagina
-        
-        # Se não tiver conteúdo, retornar vazio
-        if not conteudo_texto.strip():
-            return conteudo_binario, [], []
-        
-        # chunks = getChunks.getChunks(conteudo_texto)
-        chunks = getChunks.getChunksNLTK(conteudo_texto)
-        
-
-        # create_json_from_chunks(chunks)
-       
-        # Gerar embeddings para cada chunk
-        embeddings = []
-        for chunk in chunks:
-            embedding = hf.embed_query(chunk)
-            embeddings.append(embedding)
-        
-        return conteudo_binario, chunks, embeddings
+async def migrar_documentos(dir_documentos="documents"):
+    """Migra documentos da pasta para o banco de dados."""
+    logger.info(f"Iniciando migração de documentos da pasta: {dir_documentos}")
     
-    except Exception as e:
-        print(f"Erro ao processar arquivo {arquivo_path}: {e}")
-        return None, [], []
-
-def migrar_documentos(dir_documentos="documents"):
-    """Migra documentos da pasta para o PostgreSQL."""
-    criar_tabelas()
+    # Inicializar banco de dados
+    setup_database()
+    if not is_database_healthy():
+        logger.error("Banco de dados não está saudável. Abortando migração.")
+        return
+    
+    # Obter serviço de documentos
+    document_service = get_document_service()
     
     # Obter lista de arquivos
     arquivos = lista_arquivos(dir_documentos)
-    print(f"Encontrados {len(arquivos)} arquivos em {dir_documentos}")
+    logger.info(f"Encontrados {len(arquivos)} arquivos em {dir_documentos}")
     
     if not arquivos:
-        print("Nenhum arquivo encontrado para migração")
+        logger.warning("Nenhum arquivo encontrado para migração")
         return
     
-    conn = conectar_bd()
-    
+    # Processar cada arquivo
     for arquivo in arquivos:
         try:
             nome_arquivo = os.path.basename(arquivo)
-            tipo_arquivo = os.path.splitext(arquivo)[1][1:].lower()  # Obtém a extensão sem o ponto
+            tipo_arquivo = os.path.splitext(arquivo)[1][1:].lower()
             
-            print(f"Processando: {nome_arquivo}")
-            
-            # Extrair conteúdo e processar
-            conteudo_binario, chunks, embeddings = processar_arquivo(arquivo)
-            if not conteudo_binario:
-                print(f"Pulando arquivo {nome_arquivo}: erro na extração")
+            # Verificar se é um tipo suportado (PDF)
+            if tipo_arquivo != "pdf":
+                logger.warning(f"Pulando arquivo {nome_arquivo}: tipo não suportado ({tipo_arquivo})")
                 continue
+                
+            logger.info(f"Processando: {nome_arquivo}")
             
-            # Inserir documento original
-            cursor = conn.cursor(cursor_factory=DictCursor)
-            cursor.execute(
-                """
-                INSERT INTO documentos_originais (nome_arquivo, tipo_arquivo, conteudo_binario, metadados)
-                VALUES (%s, %s, %s, %s)
-                RETURNING id
-                """,
-                (nome_arquivo, tipo_arquivo, psycopg2.Binary(conteudo_binario), Json({"path": arquivo}))
+            # Ler conteúdo do arquivo
+            with open(arquivo, 'rb') as file:
+                conteudo_binario = file.read()
+            
+            # Processar documento usando o serviço modular
+            documento = await document_service.process_document(
+                file_name=nome_arquivo,
+                file_content=conteudo_binario,
+                file_type=tipo_arquivo,
+                metadata={"path": arquivo, "origem": "importacao_em_lote"}
             )
             
-            documento_id = cursor.fetchone()['id']
-            
-            # Inserir chunks
-            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-                chunk = limpar_texto(chunk)
-                
-                metadados = {
-                    "path": arquivo,
-                    "chunk_id": i
-                }
-                
-                cursor.execute(
-                    """
-                    INSERT INTO chunks_vetorizados 
-                    (documento_id, texto, embedding, pagina, posicao, metadados)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    """,
-                    (documento_id, chunk, embedding, 1, i, Json(metadados))
-                )
-            
-            print(f"Documento {nome_arquivo} migrado com {len(chunks)} chunks")
+            logger.info(f"Documento {nome_arquivo} processado com sucesso. ID: {documento.id}, Chunks: {documento.chunks_count}")
             
         except Exception as e:
-            print(f"Erro ao migrar documento {arquivo}: {e}")
+            logger.error(f"Erro ao processar arquivo {arquivo}: {e}")
     
-    conn.close()
-    print("Migração concluída!")
+    logger.info("Migração concluída!")
+
+async def testar_busca(query="CTA Value Tech"):
+    """Testa a busca RAG usando a nova arquitetura."""
+    logger.info(f"Testando busca para: '{query}'")
+    
+    # Verificar banco de dados
+    if not is_database_healthy():
+        logger.error("Banco de dados não está saudável. Abortando teste.")
+        return
+    
+    # Obter serviço RAG
+    rag_service = get_rag_service()
+    
+    # Realizar busca
+    result = await rag_service.process_query(
+        query=query,
+        include_debug_info=True
+    )
+    
+    # Exibir resultado
+    logger.info(f"Resposta gerada em {result.get('processing_time', 0):.2f} segundos:")
+    print("\n" + "="*80)
+    print(result.get("response", "Sem resposta"))
+    print("="*80 + "\n")
+    
+    # Exibir informações de debug, se disponíveis
+    if "debug_info" in result:
+        debug = result["debug_info"]
+        logger.info(f"Resultados encontrados: {debug.get('num_results', 0)}")
+        
+        if "sources" in debug and "scores" in debug:
+            for i, (source, score) in enumerate(zip(debug["sources"], debug["scores"])):
+                logger.info(f"Resultado {i+1}: {source} (score: {score:.4f})")
+
+async def main():
+    """Função principal do script."""
+    parser = argparse.ArgumentParser(description='Ferramenta para migração de documentos e testes de busca')
+    
+    # Definir subcomandos
+    subparsers = parser.add_subparsers(dest='comando', help='Comandos disponíveis')
+    
+    # Comando de migração
+    migrate_parser = subparsers.add_parser('migrate', help='Migrar documentos para o banco de dados')
+    migrate_parser.add_argument('--dir', type=str, default='documents', help='Diretório de documentos')
+    
+    # Comando de busca
+    search_parser = subparsers.add_parser('search', help='Testar busca RAG')
+    search_parser.add_argument('query', type=str, nargs='?', default='CTA Value Tech', help='Consulta para teste')
+    
+    # Parsing dos argumentos
+    args = parser.parse_args()
+    
+    # Executar comando apropriado
+    if args.comando == 'migrate':
+        await migrar_documentos(args.dir)
+    elif args.comando == 'search':
+        await testar_busca(args.query)
+    else:
+        parser.print_help()
 
 if __name__ == "__main__":
-    migrar_documentos()
+    asyncio.run(main())
