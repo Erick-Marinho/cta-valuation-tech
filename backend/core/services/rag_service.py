@@ -1,298 +1,156 @@
+#!/usr/bin/env python
 """
-Serviço de Retrieval-Augmented Generation (RAG).
-"""
+Ferramenta de linha de comando para migração e teste de documentos.
 
+Este script permite importar documentos para o banco de dados e testar buscas,
+utilizando a arquitetura modular da aplicação.
+"""
+import os
+import argparse
 import logging
-import time
-from typing import List, Dict, Any, Optional
-from core.config import get_settings
-from .embedding_service import get_embedding_service
-from .llm_service import get_llm_service
-from db.repositories.chunk_repository import ChunkRepository
-from db.queries.hybrid_search import realizar_busca_hibrida, rerank_results
-from processors.normalizers.text_normalizer import clean_query
-from core.metrics import (
-    RAG_QUERY_COUNTER,
-    RAG_QUERY_LATENCY,
-    RAG_CHUNKS_RETRIEVED,
-    MetricsTimer
-)
+import asyncio
+import dotenv
+from os import listdir
+from os.path import isfile, join, isdir
 
+# Importar componentes da arquitetura modular
+from core.config import get_settings
+from core.services.document_service import get_document_service
+from core.services.embedding_service import get_embedding_service
+from core.services.rag_service import get_rag_service
+from db.schema import setup_database, is_database_healthy
+from utils.logging import configure_logging
+
+# Carregar variáveis de ambiente
+dotenv.load_dotenv()
+
+# Configurar logging
+configure_logging()
 logger = logging.getLogger(__name__)
 
+def lista_arquivos(dir_path):
+    """Listar todos os arquivos em um diretório e seus subdiretórios."""
+    arquivos_list = []
 
-class RAGService:
-    """
-    Serviço de Retrieval-Augmented Generation.
+    for item in listdir(dir_path):
+        item_path = join(dir_path, item)
+        if isfile(item_path):
+            arquivos_list.append(item_path)
+        elif isdir(item_path):
+            arquivos_list += lista_arquivos(item_path)
+    return arquivos_list
 
-    Orquestra o processo completo de RAG:
-    1. Preparação e limpeza da consulta
-    2. Geração de embeddings
-    3. Recuperação de documentos relevantes
-    4. Montagem do contexto para o LLM
-    5. Geração da resposta pelo LLM
-    """
-
-    def __init__(self):
-        """
-        Inicializa o serviço RAG.
-        """
-        self.settings = get_settings()
-        self.embedding_service = get_embedding_service()
-        self.llm_service = get_llm_service()
-
-    async def process_query(
-        self,
-        query: str,
-        filtro_documentos: Optional[List[int]] = None,
-        max_results: Optional[int] = None,
-        vector_weight: Optional[float] = None,
-        include_debug_info: bool = False,
-    ) -> Dict[str, Any]:
-        """
-        Processa uma consulta usando o pipeline RAG completo.
-
-        Args:
-            query: Consulta do usuário
-            filtro_documentos: IDs de documentos para filtrar (opcional)
-            max_results: Número máximo de resultados (opcional)
-            vector_weight: Peso da busca vetorial vs. textual (opcional)
-            include_debug_info: Se True, inclui informações de depuração na resposta
-
-        Returns:
-            dict: Resposta gerada e informações de depuração (se solicitado)
-        """
-<<<<<<< HEAD
-        with MetricsTimer(RAG_QUERY_LATENCY):
-            try:
-                # 1. Preparar e limpar a consulta
-                clean_query_text = clean_query(query)
-                if not clean_query_text:
-                    RAG_QUERY_COUNTER.labels(status="error").inc()
-                    return {"response": "Não entendi sua consulta. Pode reformulá-la?"}
-                
-                # 2. Gerar embedding da consulta
-                query_embedding = self.embedding_service.embed_text(clean_query_text)
-                
-                # 3. Recuperar documentos relevantes
-                alpha = vector_weight if vector_weight is not None else self.settings.VECTOR_SEARCH_WEIGHT
-                limit = max_results if max_results is not None else self.settings.MAX_RESULTS
-                
-                retrieved_chunks = realizar_busca_hibrida(
-                    query_text=clean_query_text,
-                    query_embedding=query_embedding,
-                    limite=limit,
-                    alpha=alpha,
-                    filtro_documentos=filtro_documentos
-                )
-                
-                # Registrar número de chunks recuperados
-                RAG_CHUNKS_RETRIEVED.observe(len(retrieved_chunks))
-                
-                # 4. Reranking para melhorar a relevância
-                ranked_chunks = rerank_results(retrieved_chunks, clean_query_text)
-                
-                # 5. Preparar contexto para o LLM
-                context = ""
-                
-                if not ranked_chunks:
-                    logger.warning(f"Nenhum documento relevante encontrado para a consulta: '{query}'")
-                    context = "Não foram encontrados documentos relevantes para esta consulta específica."
-                else:
-                    for i, chunk in enumerate(ranked_chunks):
-                        context += f"Contexto {i+1} [relevância: {chunk.combined_score:.2f}]\n{chunk.texto}\n\n"
-                
-                # 6. Construir o prompt para o LLM
-                system_prompt = f"""Você é um assistente especializado em valoração de tecnologias relacionadas ao Patrimônio Genético Nacional e Conhecimentos Tradicionais Associados.
-
-                Responda à pergunta do usuário usando as informações fornecidas nos documentos do contexto. Cada contexto tem uma pontuação de relevância associada a ele - contextos com pontuação mais alta são mais relevantes para a pergunta do usuário.
-
-                IMPORTANTE: Não mencione os "contextos" ou "documentos" na sua resposta. O usuário não sabe que você está consultando diferentes fontes. Apresente a informação de forma natural e fluida.
-
-                Se realmente não houver informações suficientes nos contextos para responder adequadamente, você pode indicar isso de forma sutil, sugerindo que há limitações nas informações disponíveis, mas tente sempre fornecer valor com o que você tem.
-
-                As respostas devem ser em português brasileiro formal, mantendo a terminologia técnica apropriada ao tema de biodiversidade, conhecimentos tradicionais e propriedade intelectual.
-                """
-                
-                # 7. Gerar resposta com o LLM
-                llm_input = f"Documentos:\n{context}\n\nPergunta: {query}"
-                
-                response = await self.llm_service.generate_text(
-                    system_prompt=system_prompt,
-                    user_prompt=llm_input
-                )
-                
-                # 8. Preparar resultado
-                processing_time = time.time() - start_time
-                
-                result = {
-                    "response": response,
-                    "processing_time": processing_time
-                }
-                
-                # Adicionar informações de depuração se solicitado
-                if include_debug_info:
-                    debug_info = {
-                        "query": query,
-                        "clean_query": clean_query_text,
-                        "num_results": len(ranked_chunks),
-                        "sources": [chunk.arquivo_origem for chunk in ranked_chunks],
-                        "scores": [round(chunk.combined_score, 3) for chunk in ranked_chunks]
-                    }
-                    result["debug_info"] = debug_info
-                
-                # Registrar sucesso
-                RAG_QUERY_COUNTER.labels(status="success").inc()
-                
-                return result
-                
-            except Exception as e:
-                logger.error(f"Erro ao processar consulta RAG: {str(e)}", exc_info=True)
-                # Registrar erro
-                RAG_QUERY_COUNTER.labels(status="error").inc()
-                return {
-                    "response": "Desculpe, ocorreu um erro ao processar sua consulta. Por favor, tente novamente.",
-                    "error": str(e)
-                }
+async def migrar_documentos(dir_documentos="documents"):
+    """Migra documentos da pasta para o banco de dados."""
+    logger.info(f"Iniciando migração de documentos da pasta: {dir_documentos}")
     
-=======
-        start_time = time.time()
-
+    # Inicializar banco de dados
+    setup_database()
+    if not is_database_healthy():
+        logger.error("Banco de dados não está saudável. Abortando migração.")
+        return
+    
+    # Obter serviço de documentos
+    document_service = get_document_service()
+    
+    # Obter lista de arquivos
+    arquivos = lista_arquivos(dir_documentos)
+    logger.info(f"Encontrados {len(arquivos)} arquivos em {dir_documentos}")
+    
+    if not arquivos:
+        logger.warning("Nenhum arquivo encontrado para migração")
+        return
+    
+    # Processar cada arquivo
+    for arquivo in arquivos:
         try:
-            # 1. Preparar e limpar a consulta
-            clean_query_text = clean_query(query)
-            if not clean_query_text:
-                return {"response": "Não entendi sua consulta. Pode reformulá-la?"}
-
-            # 2. Gerar embedding da consulta
-            query_embedding = self.embedding_service.embed_text(clean_query_text)
-
-            # 3. Recuperar documentos relevantes
-            alpha = (
-                vector_weight
-                if vector_weight is not None
-                else self.settings.VECTOR_SEARCH_WEIGHT
-            )
-            limit = (
-                max_results if max_results is not None else self.settings.MAX_RESULTS
+            nome_arquivo = os.path.basename(arquivo)
+            tipo_arquivo = os.path.splitext(arquivo)[1][1:].lower()
+            
+            # Verificar se é um tipo suportado (PDF)
+            if tipo_arquivo != "pdf":
+                logger.warning(f"Pulando arquivo {nome_arquivo}: tipo não suportado ({tipo_arquivo})")
+                continue
+                
+            logger.info(f"Processando: {nome_arquivo}")
+            
+            # Ler conteúdo do arquivo
+            with open(arquivo, 'rb') as file:
+                conteudo_binario = file.read()
+            
+            # Processar documento usando o serviço modular
+            documento = await document_service.process_document(
+                file_name=nome_arquivo,
+                file_content=conteudo_binario,
+                file_type=tipo_arquivo,
+                metadata={"path": arquivo, "origem": "importacao_em_lote"}
             )
             
-            logger.info(f"Resultado variavel classe: {limit}")
-
-            retrieved_chunks = realizar_busca_hibrida(
-                query_text=clean_query_text,
-                query_embedding=query_embedding,
-                limite=limit,
-                alpha=alpha,
-                filtro_documentos=filtro_documentos,
-                threshold=0.5,
-            )
-
-            # 4. Reranking para melhorar a relevância
-            ranked_chunks = rerank_results(retrieved_chunks, clean_query_text)
-
-            # 5. Preparar contexto para o LLM
-            context = ""
-
-            if not ranked_chunks:
-                logger.warning(
-                    f"Nenhum documento relevante encontrado para a consulta: '{query}'"
-                )
-                context = "Não foram encontrados documentos relevantes para esta consulta específica."
-            else:
-                for i, chunk in enumerate(ranked_chunks):
-                    context += f"Contexto {i+1} [relevância: {chunk.combined_score:.2f}]\n{chunk.texto}\n\n"
-
-            # 6. Construir o prompt para o LLM
-            system_prompt = f"""Você é um assistente especializado em valoração de tecnologias relacionadas ao Patrimônio Genético Nacional e Conhecimentos Tradicionais Associados.
-
-            Responda ao usuário usando as informações fornecidas nos documentos do contexto. Cada contexto tem uma pontuação de relevância associada a ele - contextos com pontuação mais alta são mais relevantes para o tópico atual.
-
-            IMPORTANTE: 
-            - Não mencione os "contextos" ou "documentos" na sua resposta. O usuário não sabe que você está consultando diferentes fontes.
-            - Identifique e responda apropriadamente a saudações e interações sociais básicas sem tentar forçar informações técnicas.
-            - Para consultas técnicas, apresente a informação de forma natural e fluida.
-
-            Se realmente não houver informações suficientes nos contextos para responder adequadamente, você pode indicar isso de forma sutil, sugerindo que há limitações nas informações disponíveis, mas tente sempre fornecer valor com o que você tem.
-
-            As respostas devem ser em português brasileiro formal, mantendo a terminologia técnica apropriada ao tema de biodiversidade, conhecimentos tradicionais e propriedade intelectual quando relevante.
-            """
-
-            # 7. Gerar resposta com o LLM
-            llm_input = f"Documentos:\n{context}\n\nPergunta: {query}"
-
-            response = await self.llm_service.generate_text(
-                system_prompt=system_prompt, user_prompt=llm_input
-            )
-
-            # 8. Preparar resultado
-            processing_time = time.time() - start_time
-
-            result = {"response": response, "processing_time": processing_time}
-
-            # Adicionar informações de depuração se solicitado
-            if include_debug_info:
-                debug_info = {
-                    "query": query,
-                    "clean_query": clean_query_text,
-                    "num_results": len(ranked_chunks),
-                    "sources": [chunk.arquivo_origem for chunk in ranked_chunks],
-                    "scores": [
-                        round(chunk.combined_score, 3) for chunk in ranked_chunks
-                    ],
-                }
-                result["debug_info"] = debug_info
-
-            return result
-
+            logger.info(f"Documento {nome_arquivo} processado com sucesso. ID: {documento.id}, Chunks: {documento.chunks_count}")
+            
         except Exception as e:
-            logger.error(f"Erro ao processar consulta RAG: {str(e)}", exc_info=True)
-            return {
-                "response": "Desculpe, ocorreu um erro ao processar sua consulta. Por favor, tente novamente.",
-                "error": str(e),
-            }
+            logger.error(f"Erro ao processar arquivo {arquivo}: {e}")
+    
+    logger.info("Migração concluída!")
 
->>>>>>> dev-marinho
-    def get_similar_questions(self, query: str, limit: int = 5) -> List[str]:
-        """
-        Retorna perguntas similares à consulta do usuário.
-        Útil para sugestões de perguntas relacionadas.
+async def testar_busca(query="CTA Value Tech"):
+    """Testa a busca RAG usando a nova arquitetura."""
+    logger.info(f"Testando busca para: '{query}'")
+    
+    # Verificar banco de dados
+    if not is_database_healthy():
+        logger.error("Banco de dados não está saudável. Abortando teste.")
+        return
+    
+    # Obter serviço RAG
+    rag_service = get_rag_service()
+    
+    # Realizar busca
+    result = await rag_service.process_query(
+        query=query,
+        include_debug_info=True
+    )
+    
+    # Exibir resultado
+    logger.info(f"Resposta gerada em {result.get('processing_time', 0):.2f} segundos:")
+    print("\n" + "="*80)
+    print(result.get("response", "Sem resposta"))
+    print("="*80 + "\n")
+    
+    # Exibir informações de debug, se disponíveis
+    if "debug_info" in result:
+        debug = result["debug_info"]
+        logger.info(f"Resultados encontrados: {debug.get('num_results', 0)}")
+        
+        if "sources" in debug and "scores" in debug:
+            for i, (source, score) in enumerate(zip(debug["sources"], debug["scores"])):
+                logger.info(f"Resultado {i+1}: {source} (score: {score:.4f})")
 
-        Args:
-            query: Consulta do usuário
-            limit: Número máximo de perguntas a retornar
+async def main():
+    """Função principal do script."""
+    parser = argparse.ArgumentParser(description='Ferramenta para migração de documentos e testes de busca')
+    
+    # Definir subcomandos
+    subparsers = parser.add_subparsers(dest='comando', help='Comandos disponíveis')
+    
+    # Comando de migração
+    migrate_parser = subparsers.add_parser('migrate', help='Migrar documentos para o banco de dados')
+    migrate_parser.add_argument('--dir', type=str, default='documents', help='Diretório de documentos')
+    
+    # Comando de busca
+    search_parser = subparsers.add_parser('search', help='Testar busca RAG')
+    search_parser.add_argument('query', type=str, nargs='?', default='CTA Value Tech', help='Consulta para teste')
+    
+    # Parsing dos argumentos
+    args = parser.parse_args()
+    
+    # Executar comando apropriado
+    if args.comando == 'migrate':
+        await migrar_documentos(args.dir)
+    elif args.comando == 'search':
+        await testar_busca(args.query)
+    else:
+        parser.print_help()
 
-        Returns:
-            list: Lista de perguntas similares
-        """
-        # Implementação simplificada - em uma versão real,
-        # poderíamos ter um banco de perguntas frequentes com embeddings
-        # e fazer busca por similaridade
-
-        # Por enquanto, retornamos uma lista estática
-        return [
-            "O que é CTA Value Tech?",
-            "Como funciona a valoração de tecnologias com acesso ao PGN?",
-            "Quais são os princípios da Convenção sobre a Diversidade Biológica?",
-            "Como são calculados os royalties da sociobiodiversidade?",
-            "O que são Conhecimentos Tradicionais Associados?",
-        ][:limit]
-
-
-# Instância singleton para uso em toda a aplicação
-_rag_service_instance: Optional[RAGService] = None
-
-
-def get_rag_service() -> RAGService:
-    """
-    Retorna a instância do serviço RAG.
-
-    Returns:
-        RAGService: Instância do serviço
-    """
-    global _rag_service_instance
-
-    if _rag_service_instance is None:
-        _rag_service_instance = RAGService()
-
-    return _rag_service_instance
+if __name__ == "__main__":
+    asyncio.run(main())

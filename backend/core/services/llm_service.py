@@ -6,7 +6,7 @@ import logging
 import time
 from typing import Dict, Any, List, Optional
 from openai import OpenAI
-from backend.core.factory.model_client_factory import ModelClientFactory
+from core.factory.model_client_factory import ModelClientFactory
 from core.config import get_settings
 from core.exceptions import LLMServiceError
 from utils.logging import track_timing
@@ -38,8 +38,8 @@ class LLMService:
         Inicializa o serviço de LLM.
         """
         self.settings = get_settings()
-        # self._initialize_client()
-        self.client = ModelClientFactory._initialize_client("nvidia", self.settings)
+        self._initialize_client()
+        # self.client = ModelClientFactory._initialize_client("nvidia", self.settings)
         self._metrics = {
             "requests_total": 0,
             "tokens_input_total": 0,
@@ -48,20 +48,20 @@ class LLMService:
             "avg_response_time": 0
         }
     
-    # def _initialize_client(self):
-    #     """
-    #     Inicializa o cliente para a API de LLM.
-    #     """
-    #     try:
-    #         # Cliente para a API da NVIDIA
-    #         self.client = wrap_openai(OpenAI(
-    #             base_url="https://integrate.api.nvidia.com/v1",
-    #             api_key=self.settings.API_KEY_NVIDEA
-    #         ))
-    #         logger.info("Cliente LLM inicializado com sucesso")
-    #     except Exception as e:
-    #         logger.error(f"Erro ao inicializar cliente LLM: {e}")
-    #         raise LLMServiceError(f"Erro ao inicializar cliente LLM: {e}")
+    def _initialize_client(self):
+        """
+        Inicializa o cliente para a API de LLM.
+        """
+        try:
+            # Cliente para a API da NVIDIA
+            self.client = wrap_openai(OpenAI(
+                base_url="https://integrate.api.nvidia.com/v1",
+                api_key=self.settings.API_KEY_NVIDEA
+            ))
+            logger.info("Cliente LLM inicializado com sucesso")
+        except Exception as e:
+            logger.error(f"Erro ao inicializar cliente LLM: {e}")
+            raise LLMServiceError(f"Erro ao inicializar cliente LLM: {e}")
     
     @track_timing
     @traceable # Auto-trace this function with Langsmith

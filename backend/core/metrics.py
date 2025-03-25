@@ -93,11 +93,12 @@ class MetricsTimer:
     def __init__(self, metric):
         self.metric = metric
         self.start_time = None
+        self.duration = 0
         
     def __enter__(self):
         self.start_time = time.time()
         return self
         
     def __exit__(self, exc_type, exc_val, exc_tb):
-        duration = time.time() - self.start_time
-        self.metric.observe(duration) 
+        self.duration = time.time() - self.start_time
+        self.metric.observe(self.duration) 
