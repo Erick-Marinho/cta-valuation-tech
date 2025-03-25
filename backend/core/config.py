@@ -57,8 +57,8 @@ class Settings(BaseSettings):
     # RAG
     VECTOR_SEARCH_WEIGHT: float = 0.7  # Peso da busca vetorial vs. textual
     TEXT_SEARCH_WEIGHT: float = 0.3    # Complemento do peso vetorial
-    SEARCH_THRESHOLD: float = 0.6      # Limiar mínimo de similaridade
-    MAX_RESULTS: int = 5               # Número máximo de resultados na busca
+    SEARCH_THRESHOLD: float = 0.5      # Limiar mínimo de similaridade
+    MAX_RESULTS: int = 10               # Número máximo de resultados na busca
     
     #Logging
     LOG_LEVEL: str = "INFO"

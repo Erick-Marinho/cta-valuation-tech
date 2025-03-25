@@ -22,7 +22,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Criar diretório para arquivos processados
-RUN mkdir -p /app/documents
+RUN mkdir -p /app/backend/documents
 
 # Copiar o código da aplicação
 COPY . .
@@ -42,4 +42,4 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:8000/health/ping || exit 1
 
 # Comando para iniciar a aplicação
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

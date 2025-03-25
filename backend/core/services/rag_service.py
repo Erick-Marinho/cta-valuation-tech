@@ -76,6 +76,8 @@ class RAGService:
             limit = (
                 max_results if max_results is not None else self.settings.MAX_RESULTS
             )
+            
+            logger.info(f"Resultado variavel classe: {limit}")
 
             retrieved_chunks = realizar_busca_hibrida(
                 query_text=clean_query_text,
@@ -83,7 +85,7 @@ class RAGService:
                 limite=limit,
                 alpha=alpha,
                 filtro_documentos=filtro_documentos,
-                threshold=self.settings.SEARCH_THRESHOLD,
+                threshold=0.5,
             )
 
             # 4. Reranking para melhorar a relevância
