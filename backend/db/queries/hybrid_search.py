@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Tuple, Optional
 from ..connection import execute_query, execute_query_single_result
 from ..models.chunk import Chunk
 from core.config import get_settings
+from utils.metrics_prometheus import RAG_PROCESSING_TIME, track_time_prometheus
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ WHERE
     cv.id = %s
 """
 
+@track_time_prometheus(RAG_PROCESSING_TIME, {"stage": "vector_search"})
 def realizar_busca_hibrida(query_text: str, query_embedding: List[float], 
                         limite: int = 3, alpha: float = 0.7,
                         filtro_documentos: List[int] = None,

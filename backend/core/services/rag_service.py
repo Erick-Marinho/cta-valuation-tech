@@ -11,6 +11,13 @@ from .llm_service import get_llm_service
 from db.repositories.chunk_repository import ChunkRepository
 from db.queries.hybrid_search import realizar_busca_hibrida, rerank_results
 from processors.normalizers.text_normalizer import clean_query
+from utils.metrics_prometheus import RAG_OPERATIONS, RAG_PROCESSING_TIME, track_time_prometheus
+from utils.rag_metrics import (
+    record_relevance_score, record_tokens_processed, 
+    record_documents_retrieved, record_response_tokens,
+    record_error
+)
+import tiktoken  # Para contagem de tokens
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +42,7 @@ class RAGService:
         self.embedding_service = get_embedding_service()
         self.llm_service = get_llm_service()
 
+    @track_time_prometheus(RAG_PROCESSING_TIME, {"stage": "full_rag_pipeline"})
     async def process_query(
         self,
         query: str,
@@ -59,6 +67,7 @@ class RAGService:
         start_time = time.time()
 
         try:
+            RAG_OPERATIONS.labels(operation="query").inc()
             # 1. Preparar e limpar a consulta
             clean_query_text = clean_query(query)
             if not clean_query_text:
@@ -77,8 +86,12 @@ class RAGService:
                 max_results if max_results is not None else self.settings.MAX_RESULTS
             )
             
-            logger.info(f"Resultado variavel classe: {limit}")
+            # Estimar tokens da consulta
+            estimated_tokens = len(query.split())
+            record_tokens_processed(estimated_tokens, "query")
+            
 
+            
             retrieved_chunks = realizar_busca_hibrida(
                 query_text=clean_query_text,
                 query_embedding=query_embedding,
@@ -87,9 +100,22 @@ class RAGService:
                 filtro_documentos=filtro_documentos,
                 threshold=0.5,
             )
+            
+            record_documents_retrieved(len(retrieved_chunks))        
+
 
             # 4. Reranking para melhorar a relevância
             ranked_chunks = rerank_results(retrieved_chunks, clean_query_text)
+            
+            # Registrar pontuações de relevância
+            for chunk in ranked_chunks:
+                record_relevance_score(chunk.combined_score, "combined")
+                record_relevance_score(chunk.similarity_score, "vector")
+                record_relevance_score(chunk.text_score, "text")
+            
+            # Estimar tokens do contexto
+            context_tokens = sum(len(chunk.texto.split()) for chunk in ranked_chunks)
+            record_tokens_processed(context_tokens, "context")
 
             # 5. Preparar contexto para o LLM
             context = ""
@@ -124,6 +150,11 @@ class RAGService:
             response = await self.llm_service.generate_text(
                 system_prompt=system_prompt, user_prompt=llm_input
             )
+            
+            # Após gerar resposta com o LLM
+            response_tokens = len(response.split())
+            record_tokens_processed(response_tokens, "response")
+            record_response_tokens(response_tokens)
 
             # 8. Preparar resultado
             processing_time = time.time() - start_time
@@ -146,6 +177,11 @@ class RAGService:
             return result
 
         except Exception as e:
+            RAG_OPERATIONS.labels(operation="error").inc()
+            # Determinar o tipo de erro
+            error_type = type(e).__name__
+            component = "rag_service"
+            record_error(component, error_type)
             logger.error(f"Erro ao processar consulta RAG: {str(e)}", exc_info=True)
             return {
                 "response": "Desculpe, ocorreu um erro ao processar sua consulta. Por favor, tente novamente.",

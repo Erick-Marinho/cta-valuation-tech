@@ -17,3 +17,4 @@ psutil==5.9.5
 pytest==7.4.0
 pytest-asyncio==0.21.1
 httpx==0.25.0
+prometheus-client==0.17.1
