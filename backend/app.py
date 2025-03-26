@@ -4,6 +4,7 @@ Ponto de entrada principal da aplicação CTA Value Tech.
 import uvicorn
 import logging
 from fastapi import FastAPI
+from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from starlette_prometheus import PrometheusMiddleware, metrics
 
@@ -20,34 +21,11 @@ logger = logging.getLogger(__name__)
 # Obter configurações
 settings = get_settings()
 
-# Criar aplicação FastAPI
-app = FastAPI(
-    title=settings.APP_NAME,
-    description="API para valoração de tecnologias relacionadas ao Patrimônio Genético Nacional e Conhecimentos Tradicionais Associados",
-    version=settings.APP_VERSION,
-    docs_url="/docs",
-    redoc_url="/redoc"
-)
-
-# Configurar CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Adicionar middleware do Prometheus
-app.add_middleware(PrometheusMiddleware)
-app.add_route("/metrics", metrics)
-
-# Inicializar banco de dados na inicialização
-@app.on_event("startup")
-async def startup_db_client():
+# Definir lifespan da aplicação
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     """
-    Executa na inicialização da aplicação.
-    Configura o banco de dados e verifica a saúde.
+    Gerenciador de contexto para o ciclo de vida da aplicação.
     """
     try:
         logger.info("Inicializando banco de dados...")
@@ -60,6 +38,29 @@ async def startup_db_client():
             
     except Exception as e:
         logger.error(f"Erro ao inicializar banco de dados: {e}")
+    
+    logger.info("Application is starting...")
+    yield
+    logger.info("Application is shutting down...")
+
+# Criar aplicação FastAPI
+app = FastAPI(
+    title=settings.APP_NAME,
+    description="API para valoração de tecnologias relacionadas ao Patrimônio Genético Nacional e Conhecimentos Tradicionais Associados",
+    version=settings.APP_VERSION,
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
+
+# Configurar CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Incluir rotas da API
 app.include_router(main_router)

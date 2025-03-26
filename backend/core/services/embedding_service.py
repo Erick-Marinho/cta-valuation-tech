@@ -47,7 +47,8 @@ class EmbeddingService:
         """
         try:
             model_name = self.settings.EMBEDDING_MODEL
-            device = "cuda" if self.settings.DEBUG else "cpu"
+            # device = "cuda" if self.settings.DEBUG else "cpu"
+            device = "cpu"
             
             logger.info(f"Inicializando modelo de embeddings {model_name} no dispositivo {device}")
             
@@ -88,8 +89,9 @@ class EmbeddingService:
             # Retornar embedding zerado com a dimensão correta
             return [0.0] * self.settings.EMBEDDING_DIMENSION
         
-        # Limpar e normalizar o texto
+        # Limpar e normalizar o texto- garante que o texto seja convertido para minúsculas
         clean_text = clean_text_for_embedding(text)
+        clean_text = clean_text.lower()
         
         # Verificar no cache
         cache_key = hash(clean_text)
@@ -131,8 +133,8 @@ class EmbeddingService:
         if not texts:
             return []
         
-        # Limpar e normalizar os textos
-        clean_texts = [clean_text_for_embedding(text) for text in texts]
+        # Limpar e normalizar os textos - garante que o texto seja convertido para minúsculas
+        clean_texts = [clean_text_for_embedding(text).lower() for text in texts]
         
         # Verificar quais textos estão no cache
         embeddings = []

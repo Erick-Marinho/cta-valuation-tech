@@ -1,6 +1,7 @@
 """
 Serviço de Retrieval-Augmented Generation (RAG).
 """
+
 import logging
 import time
 from typing import List, Dict, Any, Optional
@@ -19,10 +20,11 @@ from core.metrics import (
 
 logger = logging.getLogger(__name__)
 
+
 class RAGService:
     """
     Serviço de Retrieval-Augmented Generation.
-    
+
     Orquestra o processo completo de RAG:
     1. Preparação e limpeza da consulta
     2. Geração de embeddings
@@ -30,7 +32,7 @@ class RAGService:
     4. Montagem do contexto para o LLM
     5. Geração da resposta pelo LLM
     """
-    
+
     def __init__(self):
         """
         Inicializa o serviço RAG.
@@ -38,22 +40,25 @@ class RAGService:
         self.settings = get_settings()
         self.embedding_service = get_embedding_service()
         self.llm_service = get_llm_service()
-    
-    async def process_query(self, query: str, 
-                           filtro_documentos: Optional[List[int]] = None,
-                           max_results: Optional[int] = None,
-                           vector_weight: Optional[float] = None,
-                           include_debug_info: bool = False) -> Dict[str, Any]:
+
+    async def process_query(
+        self,
+        query: str,
+        filtro_documentos: Optional[List[int]] = None,
+        max_results: Optional[int] = None,
+        vector_weight: Optional[float] = None,
+        include_debug_info: bool = False,
+    ) -> Dict[str, Any]:
         """
         Processa uma consulta usando o pipeline RAG completo.
-        
+
         Args:
             query: Consulta do usuário
             filtro_documentos: IDs de documentos para filtrar (opcional)
             max_results: Número máximo de resultados (opcional)
             vector_weight: Peso da busca vetorial vs. textual (opcional)
             include_debug_info: Se True, inclui informações de depuração na resposta
-            
+
         Returns:
             dict: Resposta gerada e informações de depuração (se solicitado)
         """
@@ -151,40 +156,42 @@ class RAGService:
         """
         Retorna perguntas similares à consulta do usuário.
         Útil para sugestões de perguntas relacionadas.
-        
+
         Args:
             query: Consulta do usuário
             limit: Número máximo de perguntas a retornar
-            
+
         Returns:
             list: Lista de perguntas similares
         """
         # Implementação simplificada - em uma versão real,
         # poderíamos ter um banco de perguntas frequentes com embeddings
         # e fazer busca por similaridade
-        
+
         # Por enquanto, retornamos uma lista estática
         return [
             "O que é CTA Value Tech?",
             "Como funciona a valoração de tecnologias com acesso ao PGN?",
             "Quais são os princípios da Convenção sobre a Diversidade Biológica?",
             "Como são calculados os royalties da sociobiodiversidade?",
-            "O que são Conhecimentos Tradicionais Associados?"
+            "O que são Conhecimentos Tradicionais Associados?",
         ][:limit]
+
 
 # Instância singleton para uso em toda a aplicação
 _rag_service_instance: Optional[RAGService] = None
 
+
 def get_rag_service() -> RAGService:
     """
     Retorna a instância do serviço RAG.
-    
+
     Returns:
         RAGService: Instância do serviço
     """
     global _rag_service_instance
-    
+
     if _rag_service_instance is None:
         _rag_service_instance = RAGService()
-    
+
     return _rag_service_instance

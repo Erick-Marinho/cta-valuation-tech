@@ -2,7 +2,7 @@
 Modelo de domínio para representar documentos na aplicação CTA Value Tech.
 """
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 from datetime import datetime
 import json
 
@@ -119,7 +119,7 @@ class Document:
         Returns:
             Documento: Modelo de documento do banco de dados
         """
-        from db.models.documento import Documento
+        from db.models.document import Documento
         
         return Documento(
             id=self.id,
