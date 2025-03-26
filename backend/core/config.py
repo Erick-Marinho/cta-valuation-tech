@@ -25,40 +25,52 @@ class Settings(BaseSettings):
         PORT: Porta do servidor
         CORS_ORIGINS: Origens permitidas para CORS
     """
+    # Configurações da aplicação
     APP_NAME: str = "CTA Value Tech"
     APP_VERSION: str = "1.0.0"
-    DEBUG: bool = True
+    DEBUG: bool = False
     
     # Database
     # Verifica se está rodando em Docker ou localhost
-    DATABASE_URL: str = os.environ.get(
-        "DATABASE_URL", 
-        "postgresql://postgres:postgres@localhost:5433/vectordb"
-    )
-    AUTO_INIT_DB: bool = os.environ.get("AUTO_INIT_DB", "False").lower() == "true"
+    DATABASE_URL: str = "postgresql://postgres:postgres@postgres:5433/vectordb"
+    AUTO_INIT_DB: bool = False
     
     # Serviços externos
-    API_KEY_NVIDEA: str = os.environ.get("API_KEY_NVIDEA", "")
-    API_KEY: Optional[str] = os.environ.get("API_KEY", None)
+    API_KEY_NVIDEA: str = ""
+    #API_KEY: Optional[str] = None
     
-    # Embeddings
+    # Configuração do modelo de embeddings
     EMBEDDING_MODEL: str = "intfloat/multilingual-e5-large-instruct"
     EMBEDDING_DIMENSION: int = 1024
-    USE_GPU: bool = os.environ.get("USE_GPU", "False").lower() == "true"
+    USE_GPU: bool = False
     
-    # Processamento de texto
+    # Configuração de processamento de texto
     CHUNK_SIZE: int = 800
     CHUNK_OVERLAP: int = 100
     
     # Servidor
-    PORT: int = int(os.environ.get("PORT", "8000"))
+    PORT: int = 8000
     CORS_ORIGINS: list = ["*"]
     
     # RAG
     VECTOR_SEARCH_WEIGHT: float = 0.7  # Peso da busca vetorial vs. textual
     TEXT_SEARCH_WEIGHT: float = 0.3    # Complemento do peso vetorial
     SEARCH_THRESHOLD: float = 0.5      # Limiar mínimo de similaridade
-    MAX_RESULTS: int = 10               # Número máximo de resultados na busca
+    MAX_RESULTS: int = 10  
+    
+    #Configurações PostgreSQL
+    POSTGRES_USER: str = "postgres"
+    POSTGRES_PASSWORD: str = "postgres"
+    POSTGRES_DB: str = "vectordb"
+    POSTGRES_PORT: str = "5433"
+
+    # Configurações PGAdmin
+    PGADMIN_DEFAULT_EMAIL: str = "admin@admin.com"
+    PGADMIN_DEFAULT_PASSWORD: str = "pgadmin"
+    PGADMIN_PORT: str = "5050"
+    
+    # Autenticação (opcional)
+    API_KEY: str = "your_api_key_here"
     
     #Logging
     LOG_LEVEL: str = "INFO"

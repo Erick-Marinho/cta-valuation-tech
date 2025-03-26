@@ -7,13 +7,16 @@ RUN apt-get update && apt-get install -y \
     gcc \
     libpq-dev \
     curl \
+    inotify-tools \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Variáveis de ambiente
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    WATCHFILES_FORCE_POLLING=true \
+    WATCHFILES_POLL_INTERVAL=0.1
 
 # Copiar requisitos primeiro para aproveitar o cache do Docker
 COPY requirements.txt .
@@ -30,9 +33,12 @@ COPY . .
 # Expor a porta da aplicação
 EXPOSE 8000
 
-# Criar usuário não privilegiado para executar a aplicação
-RUN adduser --disabled-password --gecos "" appuser && \
-    chown -R appuser:appuser /app/documents
+# Criar usuário não privilegiado e configurar permissões
+RUN useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /app && \
+    chmod -R 755 /app && \
+    chown -R appuser:appuser /app/documents && \
+    chmod -R 755 /app/documents
 
 # Mudar para o usuário não privilegiado
 USER appuser

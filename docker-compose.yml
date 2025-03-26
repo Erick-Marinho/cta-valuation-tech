@@ -29,27 +29,29 @@ services:
     ports:
       - '${BACKEND_PORT:-8000}:8000'
     volumes:
-      - ./backend:/app
-      - ./documents:/app/documents
+      - ./backend:/app:delegated
+      - ./backend/documents:/app/documents:delegated
     env_file:
       - ./backend/.env
-    command:
-      ['uvicorn', 'app:app', '--host', '0.0.0.0', '--port', '8000', '--reload']
+    command: [
+        'uvicorn',
+        'app:app',
+        '--host',
+        '0.0.0.0',
+        '--port',
+        '8000',
+        '--reload',
+        '--reload-dir',
+        '/app', # Diretório a ser monitorado
+        '--reload-delay',
+        '0.1', # Delay entre reloads
+      ]
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/vectordb
-      - DEBUG=${DEBUG:-true}
-      - AUTO_INIT_DB=true
-      # - API_KEY_NVIDEA=${API_KEY_NVIDEA}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-intfloat/multilingual-e5-large-instruct}
-      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-1024}
-      - USE_GPU=${USE_GPU:-false}
-      - CHUNK_SIZE=${CHUNK_SIZE:-800}
-      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-100}
-      - PORT=${BACKEND_PORT:-8000}
-      - APP_NAME=${APP_NAME:-"CTA Value Tech"}
-      - APP_VERSION=${APP_VERSION:-1.0.0}
+      - WATCHFILES_FORCE_POLLING=true # Força o polling em sistemas que não suportam inotify
+      - WATCHFILES_POLL_INTERVAL=0.1 # Intervalo de polling em segundos
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ['CMD', 'curl', '-f', 'http://localhost:8000/health/ping']
       interval: 10s
@@ -61,11 +63,7 @@ services:
     image: ankane/pgvector:latest
     container_name: postgres_db
     ports:
-      - '${POSTGRES_PORT:-5433}:5432'
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER:-postgres}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
-      - POSTGRES_DB=${POSTGRES_DB:-vectordb}
+      - '${POSTGRES_PORT:-5432}:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql
@@ -80,9 +78,6 @@ services:
     container_name: pgadmin
     ports:
       - '${PGADMIN_PORT:-5050}:80'
-    environment:
-      - PGADMIN_DEFAULT_EMAIL=admin@admin.com
-      - PGADMIN_DEFAULT_PASSWORD=pgadmin
     volumes:
       - pgadmin_data:/var/lib/pgadmin
     depends_on:
