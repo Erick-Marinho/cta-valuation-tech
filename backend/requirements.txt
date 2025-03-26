@@ -18,7 +18,6 @@ pytest==7.4.0  # Para testes
 pytest-asyncio==0.21.1  # Para testes assíncronos
 httpx==0.25.0  # Para testes de cliente HTTP
 nltk
-langsmith
 prometheus-client>=0.12,<0.13
 starlette-prometheus==0.9.0
 pydantic-settings>=2.4.0,<3.0.0  # Ajustado para atender langchain-community

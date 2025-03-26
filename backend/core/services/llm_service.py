@@ -6,7 +6,6 @@ import logging
 import time
 from typing import Dict, Any, List, Optional
 from openai import OpenAI
-from core.factory.model_client_factory import ModelClientFactory
 from core.config import get_settings
 from core.exceptions import LLMServiceError
 from utils.logging import track_timing
@@ -16,9 +15,6 @@ from core.metrics import (
     LLM_TOKEN_COUNTER,
     MetricsTimer
 )
-
-from langsmith.wrappers import wrap_openai
-from langsmith import traceable
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +35,7 @@ class LLMService:
         """
         self.settings = get_settings()
         self._initialize_client()
-        # self.client = ModelClientFactory._initialize_client("nvidia", self.settings)
+
         self._metrics = {
             "requests_total": 0,
             "tokens_input_total": 0,
@@ -54,17 +50,16 @@ class LLMService:
         """
         try:
             # Cliente para a API da NVIDIA
-            self.client = wrap_openai(OpenAI(
+            self.client = OpenAI(
                 base_url="https://integrate.api.nvidia.com/v1",
                 api_key=self.settings.API_KEY_NVIDEA
-            ))
+            )
             logger.info("Cliente LLM inicializado com sucesso")
         except Exception as e:
             logger.error(f"Erro ao inicializar cliente LLM: {e}")
             raise LLMServiceError(f"Erro ao inicializar cliente LLM: {e}")
     
     @track_timing
-    @traceable # Auto-trace this function with Langsmith
     async def generate_text(self, system_prompt: str, user_prompt: str, 
                           model: str = None, max_tokens: int = 1024, 
                           temperature: float = 0.3) -> str:
