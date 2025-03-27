@@ -7,14 +7,22 @@ import psycopg2
 from psycopg2.extras import DictCursor
 from contextvars import ContextVar
 from typing import Optional, Dict, Any
+from core.config import get_settings
 import logging
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+# Obter as configurações
+settings = get_settings()
+
 # URL de conexão com o banco de dados
+<<<<<<< HEAD
 DATABASE_URL = os.getenv("DATABASE_URL")
+=======
+DATABASE_URL = settings.DATABASE_URL
+>>>>>>> main
 
 # ContextVar para armazenar conexões dentro de contextos assíncronos
 connection_context: ContextVar[Optional[Dict[str, Any]]] = ContextVar("connection_context", default=None)

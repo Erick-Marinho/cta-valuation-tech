@@ -9,13 +9,7 @@ from openai import OpenAI
 from core.config import get_settings
 from core.exceptions import LLMServiceError
 from utils.logging import track_timing
-from core.metrics import (
-    LLM_REQUEST_COUNTER,
-    LLM_REQUEST_LATENCY,
-    LLM_TOKEN_COUNTER,
-    MetricsTimer
-)
-
+from utils.metrics_prometheus import LLM_PROCESSING_TIME, track_time_prometheus
 logger = logging.getLogger(__name__)
 
 class LLMService:
@@ -59,7 +53,7 @@ class LLMService:
             logger.error(f"Erro ao inicializar cliente LLM: {e}")
             raise LLMServiceError(f"Erro ao inicializar cliente LLM: {e}")
     
-    @track_timing
+    @track_time_prometheus(LLM_PROCESSING_TIME, {"operation": "llm_generation"})
     async def generate_text(self, system_prompt: str, user_prompt: str, 
                           model: str = None, max_tokens: int = 1024, 
                           temperature: float = 0.3) -> str:

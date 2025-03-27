@@ -6,6 +6,7 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from core.services.rag_service import get_rag_service, RAGService
 from core.config import get_settings, Settings
+from utils.rag_metrics import record_response_feedback
 
 # Modelos de dados para requisições e respostas
 class ChatQuery(BaseModel):
@@ -24,6 +25,12 @@ class ChatResponse(BaseModel):
 class SuggestedQuestion(BaseModel):
     """Modelo para pergunta sugerida."""
     question: str
+
+class FeedbackRequest(BaseModel):
+    """Modelo para submissão de feedback."""
+    query_id: str
+    is_helpful: bool
+    comments: Optional[str] = None
 
 
 # Roteador para endpoints de chat
@@ -109,3 +116,28 @@ async def get_suggested_questions(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao obter sugestões: {str(e)}")
+    
+@router.post("/feedback", status_code=200)
+async def submit_feedback(
+    feedback: FeedbackRequest
+):
+    """
+    Submete feedback do usuário sobre uma resposta.
+    
+    Args:
+        feedback: Detalhes do feedback
+        
+    Returns:
+        dict: Confirmação de recebimento
+    """
+    try:
+        # Registrar feedback nas métricas
+        record_response_feedback(feedback.is_helpful)
+        
+        # Aqui você pode salvar o feedback em um banco de dados para análise posterior
+        # Isso seria importante para melhorias futuras
+        
+        return {"status": "success", "message": "Feedback recebido com sucesso"}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao processar feedback: {str(e)}")

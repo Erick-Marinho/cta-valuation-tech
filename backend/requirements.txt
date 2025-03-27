@@ -21,5 +21,8 @@ nltk
 prometheus-client>=0.12,<0.13
 starlette-prometheus==0.9.0
 pydantic-settings>=2.4.0,<3.0.0  # Ajustado para atender langchain-community
-
-
+psutil==5.9.5
+pytest==7.4.0
+pytest-asyncio==0.21.1
+httpx==0.25.0
+prometheus-client==0.17.1
