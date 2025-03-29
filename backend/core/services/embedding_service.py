@@ -6,7 +6,6 @@ from typing import List, Dict, Any, Optional
 from langchain_huggingface import HuggingFaceEmbeddings
 from core.config import get_settings
 from processors.normalizers.text_normalizer import clean_text_for_embedding
-from utils.metrics_prometheus import RAG_PROCESSING_TIME, track_time_prometheus
 from utils.rag_metrics import update_cache_metrics
 
 logger = logging.getLogger(__name__)
@@ -68,7 +67,6 @@ class EmbeddingService:
             logger.error(f"Erro ao inicializar modelo de embeddings: {e}")
             raise
     
-    @track_time_prometheus(RAG_PROCESSING_TIME, {"stage": "embedding_single"})
     def embed_text(self, text: str) -> List[float]:
         """
         Gera embedding para um texto.
@@ -112,7 +110,7 @@ class EmbeddingService:
             # Retornar embedding zerado em caso de erro
             return [0.0] * self.settings.EMBEDDING_DIMENSION
     
-    @track_time_prometheus(RAG_PROCESSING_TIME, {"stage": "embedding_batch"})
+    
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """
         Gera embeddings para múltiplos textos em lote.

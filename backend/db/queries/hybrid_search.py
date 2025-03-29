@@ -6,7 +6,8 @@ from typing import List, Dict, Any, Tuple, Optional
 from ..connection import execute_query, execute_query_single_result
 from ..models.chunk import Chunk
 from core.config import get_settings
-from utils.metrics_prometheus import RAG_PROCESSING_TIME, track_time_prometheus
+from utils.logging import track_timing
+from utils.metrics_prometheus import RETRIEVAL_SCORE_DISTRIBUTION, THRESHOLD_FILTERING_COUNTER
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +61,13 @@ WHERE
     cv.id = %s
 """
 
-@track_time_prometheus(RAG_PROCESSING_TIME, {"stage": "vector_search"})
+@track_timing
 def realizar_busca_hibrida(query_text: str, query_embedding: List[float], 
                         limite: int = 3, alpha: float = 0.7,
                         filtro_documentos: List[int] = None,
                         filtro_metadados: Dict[str, Any] = None,
                         threshold: float = None,
+                        strategy_filter: str = None,
                         ) -> List[Chunk]:
     """
     Realiza uma busca híbrida avançada combinando busca vetorial e textual,
@@ -78,6 +80,7 @@ def realizar_busca_hibrida(query_text: str, query_embedding: List[float],
         alpha (float): Peso para busca vetorial (0.0 - 1.0)
         filtro_documentos (list): Lista opcional de IDs de documentos para filtrar
         filtro_metadados (dict): Filtros opcionais de metadados
+        strategy_filter (str): Filtrar por estratégia de chunking específica
         
     Returns:
         list: Lista de chunks ordenados por score combinado
@@ -99,6 +102,12 @@ def realizar_busca_hibrida(query_text: str, query_embedding: List[float],
             filter_clause += f"WHERE cv.documento_id IN ({placeholders})"
             filter_params_vector.extend(filtro_documentos)
             filter_params_text.extend(filtro_documentos)
+            
+        # Filtro por estratégia de chunking
+        if strategy_filter:
+            where_conditions.append("cv.metadados->>'chunking_strategy' = %s")
+            filter_params_vector.append(strategy_filter)
+            filter_params_text.append(strategy_filter)
         
         if filtro_metadados:
             # Construir condições JSONB para filtragem por metadados
@@ -107,19 +116,24 @@ def realizar_busca_hibrida(query_text: str, query_embedding: List[float],
             # construção dinâmica de queries JSONB
             pass
         
+        # Combinar condições em uma cláusula WHERE
+        if where_conditions:
+            filter_clause = "WHERE " + " AND ".join(where_conditions)
+        
         # Parâmetros completos para as consultas
         vector_params = [query_embedding] + filter_params_vector + [query_embedding, 20]
         text_params = [query_text, query_text] + filter_params_text + [20]
         
         # Executar consulta vetorial
         vector_query = VECTOR_SEARCH_QUERY.format(
-            filter_clause="WHERE " + filter_clause[6:] if filter_clause.startswith("WHERE ") else filter_clause
+            filter_clause=filter_clause
         )
         vector_rows = execute_query(vector_query, vector_params)
         
         # Executar consulta textual
+        text_filter_clause = " AND ".join(where_conditions) if where_conditions else ""
         text_query = TEXT_SEARCH_QUERY.format(
-            filter_clause="AND " + filter_clause[6:] if filter_clause.startswith("WHERE ") else ""
+            filter_clause=f"AND {text_filter_clause}" if text_filter_clause else ""
         )
         text_rows = execute_query(text_query, text_params)
         
@@ -154,18 +168,44 @@ def realizar_busca_hibrida(query_text: str, query_embedding: List[float],
                 chunk = Chunk.from_db_row(row)
                 chunk.similarity_score = similarity_score
                 combined_results[chunk_id] = chunk
+                
+        
+        for chunk in combined_results.values():
+            RETRIEVAL_SCORE_DISTRIBUTION.labels(
+                method='vector'
+            ).observe(chunk.similarity_score)
+            if hasattr(chunk, 'text_score') and chunk.text_score > 0:
+                RETRIEVAL_SCORE_DISTRIBUTION.labels(
+                    method='text'
+                ).observe(chunk.text_score)
         
         #Calcular scores combinados
         for chunk in combined_results.values():
             # Normalizar text_score
             norm_text_score = min(chunk.text_score, 1.0)
             
-        #     # Combinar scores
+            # Combinar scores
             chunk.combined_score = alpha * chunk.similarity_score + (1 - alpha) * norm_text_score
+            
+            # Registrar score combinado
+            RETRIEVAL_SCORE_DISTRIBUTION.labels(
+                method='hybrid'
+            ).observe(chunk.combined_score)
+            
+        # Contar total de resultados antes do filtro de threshold
+        total_resultados = len(combined_results)
         
         # Filtro de threshold    
         filtered_chunks = [chunk for chunk in combined_results.values()
                            if chunk.combined_score >= threshold]    
+        
+        # Registrar impacto do threshold
+        THRESHOLD_FILTERING_COUNTER.labels(
+            action='retained'
+        ).inc(len(filtered_chunks))
+        THRESHOLD_FILTERING_COUNTER.labels(
+            action='filtered'
+        ).inc(total_resultados - len(filtered_chunks))
         
         # Ordenar e limitar resultados
         sorted_chunks = sorted(
@@ -180,11 +220,14 @@ def realizar_busca_hibrida(query_text: str, query_embedding: List[float],
         logger.info(f"Resultados após filtro de threshold: {len(filtered_chunks)}")
         logger.info(f"Resultado variavel: {limite}")
         
-        # Logar informações sobre a busca para depuração
-        logger.debug(f"Busca híbrida por '{query_text}' retornou {len(sorted_chunks)} resultados")
-        for i, chunk in enumerate(sorted_chunks):
-            logger.debug(f"Resultado {i+1}: id={chunk.id}, score={chunk.combined_score:.4f}, "
-                         f"arquivo={chunk.arquivo_origem}")
+        # Log detalhado para depuração
+        for i, chunk in enumerate(sorted_chunks[:min(3, len(sorted_chunks))]):
+            chunking_strategy = chunk.metadados.get('chunking_strategy', 'desconhecida') if chunk.metadados else 'desconhecida'
+            logger.debug(
+                f"Top {i+1}: id={chunk.id}, score={chunk.combined_score:.4f}, "
+                f"estratégia={chunking_strategy}, "
+                f"texto={chunk.texto[:50]}..."
+            )
         
         return sorted_chunks
         
@@ -208,6 +251,9 @@ def rerank_results(chunks: List[Chunk], query_text: str) -> List[Chunk]:
     # Implementação simplificada que poderia ser expandida
     # para usar modelos externos de reranking mais sofisticados
     
+    if not chunks:
+        return []
+    
     # Por enquanto, apenas refina os scores com base em heurísticas simples
     for chunk in chunks:
         # Heurística 1: Valorizar documentos onde o termo de busca aparece primeiro
@@ -221,12 +267,39 @@ def rerank_results(chunks: List[Chunk], query_text: str) -> List[Chunk]:
         length_penalty = 0.0
         ideal_length = 500  # Tamanho ideal em caracteres
         actual_length = len(chunk.texto)
-        if actual_length > ideal_length * 2:
+        if actual_length > ideal_length * 3:
             # Penalizar chunks muito longos
-            length_penalty = min(0.03, (actual_length - ideal_length * 2) / 10000)
+            length_penalty = min(0.03, (actual_length - ideal_length * 3) / 10000)
         
-        # Aplicar ajustes ao score
-        chunk.combined_score = chunk.combined_score + position_boost - length_penalty
-    
+        # 3. Boost baseado na estratégia de chunking (preferência contextual)
+        strategy_boost = 0.0
+        if chunk.metadados and 'chunking_strategy' in chunk.metadados:
+            strategy = chunk.metadados['chunking_strategy']
+            
+            # Tipo de consulta baseado no comprimento e estrutura
+            query_words = query_text.split()
+            is_specific_query = len(query_words) > 5 or '?' in query_text
+            
+            if is_specific_query and strategy == "header_based":
+                # Consultas específicas funcionam melhor com chunks baseados em cabeçalhos
+                strategy_boost = 0.03
+            elif not is_specific_query and strategy == "paragraph":
+                # Consultas simples funcionam bem com chunks de parágrafo
+                strategy_boost = 0.02
+            elif strategy == "hybrid":
+                # Híbrido é geralmente um bom meio termo
+                strategy_boost = 0.01
+                
+        # 4. Boost baseado na qualidade do chunk
+        quality_boost = 0.0
+        if chunk.metadados and 'chunk_quality' in chunk.metadados:
+            # Qualidade é um valor entre 0 e 1
+            quality = float(chunk.metadados['chunk_quality'])
+            quality_boost = quality * 0.04  # Máximo de 4%
+        
+        # Aplicar todos os ajustes
+        total_adjustment = position_boost + strategy_boost + quality_boost - length_penalty
+        chunk.combined_score = chunk.combined_score * (1 + total_adjustment)
+        
     # Reordenar com base nos scores ajustados
     return sorted(chunks, key=lambda x: x.combined_score, reverse=True)
