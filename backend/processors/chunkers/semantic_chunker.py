@@ -5,9 +5,21 @@ import logging
 import re
 from typing import List, Dict, Any
 from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter
+
+from processors.normalizers.no_stopwords import remove_stopwords
+from core.config import get_settings
 from ..normalizers.text_normalizer import normalize_text
 
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_experimental.text_splitter import SemanticChunker
+
 logger = logging.getLogger(__name__)
+
+settings = get_settings()
+
+embeddings = HuggingFaceEmbeddings(
+    model_name=settings.EMBEDDING_MODEL,
+)
 
 def create_semantic_chunks(text: str, chunk_size: int = 800, chunk_overlap: int = 100) -> List[str]:
     """
@@ -111,10 +123,11 @@ def create_semantic_chunks(text: str, chunk_size: int = 800, chunk_overlap: int 
             separators=["\n\n", "\n", ". ", " ", ""]
         )
         chunks = text_splitter.split_text(text)
-        
+   
         # Tentar identificar e preservar parágrafos completos
         refined_chunks = []
         for chunk in chunks:
+            # chunk = remove_stopwords(chunk)
             # Se o chunk for muito pequeno e parecer incompleto, tente expandir
             if len(chunk) < chunk_size * 0.5 and not chunk.endswith("."):
                 # Buscar o próximo ponto final para completar o parágrafo

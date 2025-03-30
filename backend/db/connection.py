@@ -18,11 +18,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # URL de conexão com o banco de dados
-<<<<<<< HEAD
-DATABASE_URL = os.getenv("DATABASE_URL")
-=======
 DATABASE_URL = settings.DATABASE_URL
->>>>>>> main
 
 # ContextVar para armazenar conexões dentro de contextos assíncronos
 connection_context: ContextVar[Optional[Dict[str, Any]]] = ContextVar("connection_context", default=None)
