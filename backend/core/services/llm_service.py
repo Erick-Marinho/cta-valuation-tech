@@ -9,7 +9,6 @@ from openai import OpenAI
 from core.config import get_settings
 from core.exceptions import LLMServiceError
 from utils.logging import track_timing
-from utils.metrics_prometheus import LLM_PROCESSING_TIME, track_time_prometheus
 logger = logging.getLogger(__name__)
 
 class LLMService:
@@ -29,7 +28,6 @@ class LLMService:
         """
         self.settings = get_settings()
         self._initialize_client()
-
         self._metrics = {
             "requests_total": 0,
             "tokens_input_total": 0,
@@ -53,7 +51,6 @@ class LLMService:
             logger.error(f"Erro ao inicializar cliente LLM: {e}")
             raise LLMServiceError(f"Erro ao inicializar cliente LLM: {e}")
     
-    @track_time_prometheus(LLM_PROCESSING_TIME, {"operation": "llm_generation"})
     async def generate_text(self, system_prompt: str, user_prompt: str, 
                           model: str = None, max_tokens: int = 1024, 
                           temperature: float = 0.3) -> str:
@@ -74,9 +71,14 @@ class LLMService:
             model = "meta/llama3-70b-instruct"  # Modelo padrão
         
         try:
+            start_time = time.time()
+            
+            # Registrar uso
+            self._metrics["requests_total"] += 1
+            
             # Estimar tokens de entrada (aproximação simples)
             input_tokens = len(system_prompt.split()) + len(user_prompt.split())
-            LLM_TOKEN_COUNTER.labels(type="input").inc(input_tokens)
+            self._metrics["tokens_input_total"] += input_tokens
             
             # Preparar mensagens
             messages = [
@@ -85,35 +87,40 @@ class LLMService:
             ]
             
             # Chamar a API
-            with MetricsTimer(LLM_REQUEST_LATENCY):
-                response = self.client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=0.9,
-                    frequency_penalty=0.3,
-                    presence_penalty=0.2,
-                    stream=False
-                )
+            response = self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=0.9,
+                frequency_penalty=0.3,
+                presence_penalty=0.2,
+                stream=False
+            )
             
             # Extrair resposta
             result = response.choices[0].message.content
             
             # Estimar tokens de saída (aproximação simples)
             output_tokens = len(result.split())
-            LLM_TOKEN_COUNTER.labels(type="output").inc(output_tokens)
+            self._metrics["tokens_output_total"] += output_tokens
             
-            # Registrar sucesso
-            LLM_REQUEST_COUNTER.labels(status="success", model=model).inc()
+            # Calcular média de tempo de resposta
+            elapsed_time = time.time() - start_time
+            total_requests = self._metrics["requests_total"]
+            current_avg = self._metrics["avg_response_time"]
             
-            logger.info(f"Geração de texto concluída, {output_tokens} tokens gerados")
+            # Atualizar média de tempo de resposta
+            self._metrics["avg_response_time"] = (
+                (current_avg * (total_requests - 1) + elapsed_time) / total_requests
+            )
+            
+            logger.info(f"Geração de texto concluída em {elapsed_time:.2f}s, {output_tokens} tokens gerados")
             
             return result
             
         except Exception as e:
-            # Registrar erro
-            LLM_REQUEST_COUNTER.labels(status="error", model=model).inc()
+            self._metrics["errors_total"] += 1
             logger.error(f"Erro ao gerar texto com LLM: {e}")
             raise LLMServiceError(f"Erro ao gerar texto: {e}")
     
