@@ -4,11 +4,17 @@ Serviço para interação com modelos de linguagem.
 import os
 import logging
 import time
+import tiktoken
 from typing import Dict, Any, List, Optional
 from openai import OpenAI
 from core.config import get_settings
 from core.exceptions import LLMServiceError
 from utils.logging import track_timing
+from utils.telemetry import get_tracer
+from opentelemetry import trace
+from utils.metrics_prometheus import record_llm_time, record_tokens, record_llm_error
+
+
 logger = logging.getLogger(__name__)
 
 class LLMService:
@@ -27,30 +33,57 @@ class LLMService:
         Inicializa o serviço de LLM.
         """
         self.settings = get_settings()
+        self.tracer = get_tracer(__name__)
         self._initialize_client()
-        self._metrics = {
-            "requests_total": 0,
-            "tokens_input_total": 0,
-            "tokens_output_total": 0,
-            "errors_total": 0,
-            "avg_response_time": 0
-        }
+        
+        # Inicializar o tokenizador Tiktoken
+        try:
+            # cl100k_base é usado por GPT-4, GPT-3.5. Pode ser adequado para Llama 3,
+            # mas idealmente verificar a documentação específica do modelo Nvidia/Meta.
+            self.tokenizer = tiktoken.get_encoding("cl100k_base")
+            # Alternativa: Tentar pelo nome do modelo se suportado pela API da Nvidia (menos provável)
+            # self.tokenizer = tiktoken.encoding_for_model(self.settings.LLM_MODEL) # Usar o modelo das settings
+        except ValueError:
+            logger.warning("Encoding cl100k_base não encontrado ou modelo não mapeado. Usando split() como fallback para contagem de tokens.")
+            self.tokenizer = None # Usaremos split() como fallback
     
     def _initialize_client(self):
         """
         Inicializa o cliente para a API de LLM.
         """
-        try:
-            # Cliente para a API da NVIDIA
-            self.client = OpenAI(
-                base_url="https://integrate.api.nvidia.com/v1",
-                api_key=self.settings.API_KEY_NVIDEA
-            )
-            logger.info("Cliente LLM inicializado com sucesso")
-        except Exception as e:
-            logger.error(f"Erro ao inicializar cliente LLM: {e}")
-            raise LLMServiceError(f"Erro ao inicializar cliente LLM: {e}")
-    
+        
+        with self.tracer.start_as_current_span("initialize_llm_client") as span:
+            try:
+                # Cliente para a API da NVIDIA
+                self.client = OpenAI(
+                    base_url="https://integrate.api.nvidia.com/v1",
+                    api_key=self.settings.API_KEY_NVIDEA
+                )
+                span.set_attribute("initialization.success", True)
+                logger.info("Cliente LLM inicializado com sucesso")
+            except Exception as e:
+                span.set_attribute("initialization.success", False)
+                span.set_attribute("error.message", str(e))
+                span.record_exception(e)
+                
+                logger.error(f"Erro ao inicializar cliente LLM: {e}")
+                raise LLMServiceError(f"Erro ao inicializar cliente LLM: {e}")
+            
+    def _count_tokens(self, text: str) -> int:
+        """
+        Conta tokens usando o tokenizador Tiktoken ou fallback para split().
+        """
+        if self.tokenizer:
+            try:
+                return len(self.tokenizer.encode(text))
+            except Exception as e:
+                logger.warning(f"Erro ao usar tiktoken para contar tokens: {e}. Usando split().")
+                # Fallback em caso de erro com tiktoken em texto específico
+                return len(text.split())
+        else:
+            # Fallback se o tokenizador não foi inicializado
+            return len(text.split())
+        
     async def generate_text(self, system_prompt: str, user_prompt: str, 
                           model: str = None, max_tokens: int = 1024, 
                           temperature: float = 0.3) -> str:
@@ -68,78 +101,90 @@ class LLMService:
             str: Texto gerado
         """
         if not model:
-            model = "meta/llama3-70b-instruct"  # Modelo padrão
+            # Usar modelo das settings se disponível, senão um default
+            model = getattr(self.settings, 'LLM_MODEL', 'meta/llama3-70b-instruct')
         
-        try:
-            start_time = time.time()
-            
-            # Registrar uso
-            self._metrics["requests_total"] += 1
+        start_time = time.time()
+        
+        # Criar span para rastrear a geração de texto
+        with self.tracer.start_as_current_span("llm_generate_text") as span:
+            # Registrar parâmetros da requisição como atributos
+            span.set_attribute("llm.model", model)
+            span.set_attribute("llm.max_tokens", max_tokens)
+            span.set_attribute("llm.temperature", temperature)
+            span.set_attribute("system_prompt.length", len(system_prompt))
+            span.set_attribute("user_prompt.length", len(user_prompt))
             
             # Estimar tokens de entrada (aproximação simples)
             input_tokens = len(system_prompt.split()) + len(user_prompt.split())
-            self._metrics["tokens_input_total"] += input_tokens
+            span.set_attribute("input.tokens_estimate", input_tokens)
             
-            # Preparar mensagens
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ]
+            try:
+                # Contagem de tokens de entrada usando tiktoken (ou fallback)
+                input_tokens = self._count_tokens(system_prompt + user_prompt)
+                span.set_attribute("input.tokens", input_tokens) # Registrar contagem precisa no span
+                record_tokens(input_tokens, "input") # Enviar para Prometheus
+                
+                # Preparar mensagens
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
+                
+                # Criar sub-span para a chamada à API
+                with self.tracer.start_as_current_span("llm_api_call") as api_span:
+                    api_span.set_attribute("llm.api_endpoint", self.client.base_url)
+                
+                    # Chamar a API
+                    response = self.client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        top_p=0.9,
+                        frequency_penalty=0.3,
+                        presence_penalty=0.2,
+                        stream=False
+                    )
+                
+                # Extrair resposta
+                result = response.choices[0].message.content
+                
+                # Estimar tokens de saída (aproximação simples)
+                output_tokens = len(result.split())
+                record_tokens(output_tokens, "output")  # Métrica Prometheus
+                
+                # Calcular média de tempo de resposta
+                elapsed_time = time.time() - start_time
+                record_llm_time(elapsed_time, model) # Registrar tempo no Prometheus
+                span.set_attribute("response_time", elapsed_time)
+                
+                # Calcular tempo total
+                elapsed_time = time.time() - start_time
+                
+                # Registrar em métrica Prometheus
+                record_llm_time(elapsed_time, model)
+                
+                token_count_method = "tiktoken" if self.tokenizer else "split"
             
-            # Chamar a API
-            response = self.client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=0.9,
-                frequency_penalty=0.3,
-                presence_penalty=0.2,
-                stream=False
-            )
+                
+                logger.info(f"Geração de texto concluída em {elapsed_time:.2f}s. Tokens In: {input_tokens}, Out: {output_tokens} (método: {token_count_method})")
+                
+                return result
             
-            # Extrair resposta
-            result = response.choices[0].message.content
-            
-            # Estimar tokens de saída (aproximação simples)
-            output_tokens = len(result.split())
-            self._metrics["tokens_output_total"] += output_tokens
-            
-            # Calcular média de tempo de resposta
-            elapsed_time = time.time() - start_time
-            total_requests = self._metrics["requests_total"]
-            current_avg = self._metrics["avg_response_time"]
-            
-            # Atualizar média de tempo de resposta
-            self._metrics["avg_response_time"] = (
-                (current_avg * (total_requests - 1) + elapsed_time) / total_requests
-            )
-            
-            logger.info(f"Geração de texto concluída em {elapsed_time:.2f}s, {output_tokens} tokens gerados")
-            
-            return result
-            
-        except Exception as e:
-            self._metrics["errors_total"] += 1
-            logger.error(f"Erro ao gerar texto com LLM: {e}")
-            raise LLMServiceError(f"Erro ao gerar texto: {e}")
-    
-    def get_metrics(self) -> Dict[str, Any]:
-        """
-        Retorna métricas de uso do serviço.
+            except Exception as e:                
+                # Registrar mesmo em caso de erro
+                elapsed_time = time.time() - start_time
+                record_llm_time(elapsed_time, model)
+                record_llm_error(model)
+                
+                # Registrar no span
+                span.record_exception(e)
+                span.set_status(trace.Status(trace.StatusCode.ERROR, f"Erro: {e}"))
+                
+                logger.error(f"Erro ao gerar texto com LLM: {e}", exc_info=True)
+                raise LLMServiceError(f"Erro ao gerar texto: {e}")
         
-        Returns:
-            dict: Métricas de uso
-        """
-        return {
-            **self._metrics,
-            "avg_tokens_per_request": (
-                self._metrics["tokens_output_total"] / max(1, self._metrics["requests_total"])
-            ),
-            "error_rate": (
-                self._metrics["errors_total"] / max(1, self._metrics["requests_total"])
-            )
-        }
 
 # Instância singleton
 _llm_service_instance: Optional[LLMService] = None

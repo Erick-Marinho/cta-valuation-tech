@@ -7,7 +7,9 @@ import logging
 from fastapi import FastAPI, Request
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
-from utils.metrics_prometheus import HTTP_REQUESTS_TOTAL, REQUEST_LATENCY, ERROR_RATE, THROUGHPUT, update_system_metrics
+from utils.metrics_prometheus import HTTP_REQUESTS_TOTAL, REQUEST_LATENCY, update_system_metrics
+from utils.telemetry import setup_telemetry
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 # Importações dos módulos da aplicação
 from core.config import get_settings
@@ -23,10 +25,6 @@ logger = logging.getLogger(__name__)
 # Obter configurações
 settings = get_settings()
 
-# Variáveis para cálculo de throughput
-_last_request_count = 0
-_last_request_time = time.time()
-
 # Definir lifespan da aplicação
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -34,6 +32,11 @@ async def lifespan(app: FastAPI):
     Gerenciador de contexto para o ciclo de vida da aplicação.
     """
     try:
+        # Inicializar OpenTelemetry antes de tudo
+        setup_telemetry("cta-value-tech")
+        logger.info("OpenTelemetry inicializado com sucesso")
+        
+        # Configurar banco de dados
         logger.info("Inicializando banco de dados...")
         setup_database()
         
@@ -59,6 +62,9 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
+# Instrumentar a aplicação para OpenTelemetry
+FastAPIInstrumentor.instrument_app(app)
+
 #Criar app de métricas e inicializar info
 metrics_app = create_metrics_app()
 init_app_info(settings.APP_NAME, settings.APP_VERSION)
@@ -74,15 +80,14 @@ app.add_middleware(
 )
 
 @app.middleware("http")
-async def metrics_middleware(request: Request, call_next):
-    global _last_request_count, _last_request_time
-    
+async def metrics_middleware(request: Request, call_next):    
     
     # Atualizar métricas do sistema
     update_system_metrics()
     
     # Registrar início da requisição
     start_time = time.time()
+    status_code = 500 # Default para caso de erro inesperado antes da resposta
     
     # Processar a requisição
     try:
@@ -110,64 +115,6 @@ async def metrics_middleware(request: Request, call_next):
             method=method, 
             endpoint=endpoint
         ).observe(request_time)
-    
-    # 3. Calcular e atualizar taxa de erro para este endpoint
-        # Obter contadores atuais
-        try:
-            total_requests = sum([
-                HTTP_REQUESTS_TOTAL.labels(
-                    method=method, 
-                    endpoint=endpoint, 
-                    status=str(s)
-                )._value.get() or 0
-                for s in [200, 201, 400, 401, 403, 404, 500]
-            ])
-            
-            error_requests = sum([
-                HTTP_REQUESTS_TOTAL.labels(
-                    method=method, 
-                    endpoint=endpoint, 
-                    status=str(s)
-                )._value.get() or 0
-                for s in [400, 401, 403, 404, 500]
-            ])
-            
-            # Calcular taxa de erro (%)
-            if total_requests > 0:
-                error_percent = (error_requests / total_requests) * 100
-                ERROR_RATE.labels(endpoint=endpoint).set(error_percent)
-        except Exception as e:
-            # Não deixar falhas na métrica interromper o fluxo
-            logger.warning(f"Erro ao calcular taxa de erro: {e}")
-    
-    # 4. Calcular throughput (requisições por minuto)
-        current_time = time.time()
-        elapsed_min = (current_time - _last_request_time) / 60  # converter para minutos
-    
-    # Atualizar a cada 10 segundos aproximadamente
-        if elapsed_min >= 0.16:  # ~10 segundos em minutos
-            current_count = sum([
-                HTTP_REQUESTS_TOTAL.labels(
-                    method=m, 
-                    endpoint=e, 
-                    status=str(s)
-                )._value.get() or 0
-                for m in ['GET', 'POST', 'PUT', 'DELETE']
-                for e in ['/chat', '/documents', '/health', '*']  # endpoints principais
-                for s in [200, 201, 400, 401, 403, 404, 500]
-            ])
-            
-            # Calcular requisições no período
-            request_diff = current_count - _last_request_count
-            
-            # Se houve requisições no período, calcular a taxa
-            if elapsed_min > 0:
-                req_per_minute = request_diff / elapsed_min
-                THROUGHPUT.set(req_per_minute)
-            
-            # Atualizar valores para o próximo cálculo
-            _last_request_count = current_count
-            _last_request_time = current_time
     
     return response
 

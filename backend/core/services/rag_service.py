@@ -5,16 +5,17 @@ Serviço de Retrieval-Augmented Generation (RAG).
 import logging
 import time
 from typing import List, Dict, Any, Optional
+from utils.telemetry import get_tracer
+from opentelemetry import trace
 from core.config import get_settings
 from .embedding_service import get_embedding_service
 from .llm_service import get_llm_service
 from db.repositories.chunk_repository import ChunkRepository
 from db.queries.hybrid_search import realizar_busca_hibrida, rerank_results
 from processors.normalizers.text_normalizer import clean_query
-from utils.rag_metrics import (
-    record_relevance_score, record_tokens_processed, 
-    record_documents_retrieved, record_response_tokens,
-    record_error
+from utils.metrics_prometheus import (
+    record_retrieval_score, record_tokens, 
+    record_documents_retrieved, record_llm_error
 )
 import tiktoken  # Para contagem de tokens
 
@@ -40,7 +41,8 @@ class RAGService:
         self.settings = get_settings()
         self.embedding_service = get_embedding_service()
         self.llm_service = get_llm_service()
-        
+        self.tracer = get_tracer(__name__)
+
     def apply_quality_boost(self, chunks):
         """
         Aplica um boost de relevância baseado na qualidade dos chunks.
@@ -118,35 +120,53 @@ class RAGService:
             dict: Resposta gerada e informações de depuração (se solicitado)
         """
         start_time = time.time()
+        
+        with self.tracer.start_as_current_span("rag_process_query") as span:
+            # Adicionar atributos ao span para facilitar a análise
+            span.set_attribute("query.text", query)
+            span.set_attribute("query.length", len(query))
+            if filtro_documentos:
+                span.set_attribute("query.filter_docs_count", len(filtro_documentos))
+        
+            start_time = time.time()
 
         try:
             
             # 1. Preparar e limpar a consulta
-            clean_query_text = clean_query(query)
+            with self.tracer.start_as_current_span("query_processing") as processing_span:
+                clean_query_text = clean_query(query)
+            processing_span.set_attribute("query.clean_text", clean_query_text)
+            
             if not clean_query_text:
                 return {"response": "Não entendi sua consulta. Pode reformulá-la?"}
 
             # 2. Gerar embedding da consulta
-            query_embedding = self.embedding_service.embed_text(clean_query_text)
+            with self.tracer.start_as_current_span("query_embedding") as embedding_span:
+                query_embedding = self.embedding_service.embed_text(clean_query_text)
+                embedding_span.set_attribute("query.embedding_length", len(query_embedding))
 
             # 3. Recuperar documentos relevantes
-            alpha = (
-                vector_weight
-                if vector_weight is not None
-                else self.settings.VECTOR_SEARCH_WEIGHT
-            )
-            limit = (
-                max_results if max_results is not None else self.settings.MAX_RESULTS
-            )
+            with self.tracer.start_as_current_span("document_retrieval") as retrieval_span:
+                alpha = (
+                    vector_weight
+                    if vector_weight is not None
+                    else self.settings.VECTOR_SEARCH_WEIGHT
+                )
+                retrieval_span.set_attribute("retrieval.alpha", alpha)
+                limit = (
+                    max_results if max_results is not None else self.settings.MAX_RESULTS
+                )
+                retrieval_span.set_attribute("retrieval.limit", limit)
             
             # Estimar tokens da consulta
             estimated_tokens = len(query.split())
-            record_tokens_processed(estimated_tokens, "query")
+            record_tokens(estimated_tokens, "query")
             
             # Ajustar o threshold com base no tipo de consulta
             # Consultas mais específicas podem usar threshold mais alto
             query_specificity = len(clean_query_text.split()) / 5  # Número de termos / 5
             adjusted_threshold = min(0.7, max(0.5, 0.5 + (query_specificity * 0.05)))
+            retrieval_span.set_attribute("retrieval.threshold", adjusted_threshold)
             
             logger.info(f"Threshold ajustado para {adjusted_threshold:.2f} baseado na especificidade da consulta")
             
@@ -159,75 +179,101 @@ class RAGService:
                 threshold=adjusted_threshold,  # Usar threshold ajustado
             )
             
+            retrieval_span.set_attribute("retrieval.chunks_count", len(retrieved_chunks))
             record_documents_retrieved(len(retrieved_chunks))        
 
             # 4. Reranking para melhorar a relevância
-            ranked_chunks = rerank_results(retrieved_chunks, clean_query_text)
+            with self.tracer.start_as_current_span("reranking") as rerank_span:
+                ranked_chunks = rerank_results(retrieved_chunks, clean_query_text)
+                rerank_span.set_attribute("reranking.chunks_count", len(ranked_chunks))
+            
+            # Aplicar boost de qualidade aos chunks ranqueados
+            with self.tracer.start_as_current_span("quality_boost") as quality_boost_span:
+                quality_boosted_chunks = self.apply_quality_boost(ranked_chunks)
+                quality_boost_span.set_attribute("quality_boost.chunks_count", len(quality_boosted_chunks))
             
             # Limitar ao número desejado após todos os ajustes
             final_chunks = quality_boosted_chunks[:limit]
+            rerank_span.set_attribute("reranking.final_chunks_count", len(final_chunks))
             
             # Registrar pontuações de relevância
             for chunk in ranked_chunks:
-                record_relevance_score(chunk.combined_score, "combined")
-                record_relevance_score(chunk.similarity_score, "vector")
-                record_relevance_score(chunk.text_score, "text")
+                record_retrieval_score(chunk.combined_score, "combined")
+                record_retrieval_score(chunk.similarity_score, "vector")
+                record_retrieval_score(chunk.text_score, "text")
             
             # Estimar tokens do contexto
             context_tokens = sum(len(chunk.texto.split()) for chunk in ranked_chunks)
-            record_tokens_processed(context_tokens, "context")
+            record_tokens(context_tokens, "context")
+            span.set_attribute("context.tokens", context_tokens)
 
             # 5. Preparar contexto para o LLM
-            context = ""
+            with self.tracer.start_as_current_span("context_preparation") as context_span:
+                context = ""
 
-            if not ranked_chunks:
-                logger.warning(
-                    f"Nenhum documento relevante encontrado para a consulta: '{query}'"
-                )
-                context = "Não foram encontrados documentos relevantes para esta consulta específica."
-            else:
-                for i, chunk in enumerate(ranked_chunks):
-                    strategy_info = ""
-                    if chunk.metadados and 'chunking_strategy' in chunk.metadados:
-                        strategy_info = f" [estratégia: {chunk.metadados['chunking_strategy']}]"
-                    
-                    logger.debug(
-                        f"Chunk {i+1}: score={chunk.combined_score:.3f}{strategy_info}, "
-                        f"texto={chunk.texto[:50]}..."
+                if not ranked_chunks:
+                    logger.warning(
+                        f"Nenhum documento relevante encontrado para a consulta: '{query}'"
                     )
+                    context = "Não foram encontrados documentos relevantes para esta consulta específica."
+                    context_span.set_attribute("context.empty", True)
+                else:
+                    context_span.set_attribute("context.empty", False)
+                    for i, chunk in enumerate(ranked_chunks):
+                        strategy_info = ""
+                        if chunk.metadados and 'chunking_strategy' in chunk.metadados:
+                            strategy = chunk.metadados['chunking_strategy']
+                            strategy_info = f" [estratégia: {strategy}]"
+                            # Adicionar esta informação no span
+                            context_span.set_attribute(f"context.chunk_{i}.strategy", strategy)
                     
-                    # Formar o contexto para o LLM (sem mostrar a estratégia)
-                    context += f"Contexto {i+1} [relevância: {chunk.combined_score:.2f}]\n{chunk.texto}\n\n"
+                        logger.debug(
+                            f"Chunk {i+1}: score={chunk.combined_score:.3f}{strategy_info}, "
+                            f"texto={chunk.texto[:50]}..."
+                        )
+                    
+                        # Formar o contexto para o LLM (sem mostrar a estratégia)
+                        context += f"Contexto {i+1} [relevância: {chunk.combined_score:.2f}]\n{chunk.texto}\n\n"
+                        
+                context_span.set_attribute("context.length", len(context))
 
             # 6. Construir o prompt para o LLM
-            system_prompt = f"""Você é um assistente especializado em valoração de tecnologias relacionadas ao Patrimônio Genético Nacional e Conhecimentos Tradicionais Associados.
+            with self.tracer.start_as_current_span("prompt_building") as prompt_span:
+                system_prompt = f"""Você é um assistente especializado em valoração de tecnologias relacionadas ao Patrimônio Genético Nacional e Conhecimentos Tradicionais Associados.
 
-            Responda ao usuário usando as informações fornecidas nos documentos do contexto. Cada contexto tem uma pontuação de relevância associada a ele - contextos com pontuação mais alta são mais relevantes para o tópico atual.
+                Responda ao usuário usando as informações fornecidas nos documentos do contexto. Cada contexto tem uma pontuação de relevância associada a ele - contextos com pontuação mais alta são mais relevantes para o tópico atual.
 
-            IMPORTANTE: 
-            - Não mencione os "contextos" ou "documentos" na sua resposta. O usuário não sabe que você está consultando diferentes fontes.
-            - Identifique e responda apropriadamente a saudações e interações sociais básicas sem tentar forçar informações técnicas.
-            - Para consultas técnicas, apresente a informação de forma natural e fluida.
+                IMPORTANTE: 
+                - Não mencione os "contextos" ou "documentos" na sua resposta. O usuário não sabe que você está consultando diferentes fontes.
+                - Identifique e responda apropriadamente a saudações e interações sociais básicas sem tentar forçar informações técnicas.
+                - Para consultas técnicas, apresente a informação de forma natural e fluida.
 
-            Se realmente não houver informações suficientes nos contextos para responder adequadamente, você pode indicar isso de forma sutil, sugerindo que há limitações nas informações disponíveis, mas tente sempre fornecer valor com o que você tem.
+                Se realmente não houver informações suficientes nos contextos para responder adequadamente, você pode indicar isso de forma sutil, sugerindo que há limitações nas informações disponíveis, mas tente sempre fornecer valor com o que você tem.
 
-            As respostas devem ser em português brasileiro formal, mantendo a terminologia técnica apropriada ao tema de biodiversidade, conhecimentos tradicionais e propriedade intelectual quando relevante.
-            """
+                As respostas devem ser em português brasileiro formal, mantendo a terminologia técnica apropriada ao tema de biodiversidade, conhecimentos tradicionais e propriedade intelectual quando relevante.
+                """
 
-            # 7. Gerar resposta com o LLM
-            llm_input = f"Documentos:\n{context}\n\nPergunta: {query}"
-
-            response = await self.llm_service.generate_text(
-                system_prompt=system_prompt, user_prompt=llm_input
-            )
+                # 7. Gerar resposta com o LLM
+                llm_input = f"Documentos:\n{context}\n\nPergunta: {query}"
+                prompt_span.set_attribute("prompt.system_length", len(system_prompt))
+                prompt_span.set_attribute("prompt.user_length", len(llm_input))
             
-            # Após gerar resposta com o LLM
+            # 8. Enviar para o LLM e obter resposta
+            with self.tracer.start_as_current_span("llm_generation") as llm_span:
+                response = await self.llm_service.generate_text(
+                    system_prompt=system_prompt, user_prompt=llm_input
+                )
+                
+                
+            # Após gerar resposta com o LLM    
             response_tokens = len(response.split())
-            record_tokens_processed(response_tokens, "response")
-            record_response_tokens(response_tokens)
+            record_tokens(response_tokens, "response")
+            llm_span.set_attribute("response.tokens", response_tokens)
+            llm_span.set_attribute("response.length", len(response))
 
-            # 8. Preparar resultado
+            # 9. Preparar resultado
             processing_time = time.time() - start_time
+            span.set_attribute("processing.total_time", processing_time)
 
             result = {"response": response, "processing_time": processing_time}
 
@@ -255,14 +301,13 @@ class RAGService:
             return result
 
         except Exception as e:
-            # Determinar o tipo de erro
+            execution_time = time.time() - start_time
             error_type = type(e).__name__
             component = "rag_service"
-            record_error(component, error_type)
+            record_llm_error(component)
             logger.error(f"Erro ao processar consulta RAG: {str(e)}", exc_info=True)
             return {
-                "response": "Desculpe, ocorreu um erro ao processar sua consulta. Por favor, tente novamente.",
-                "error": str(e),
+                "response": "Desculpe, ocorreu um erro ao processar sua consulta. Por favor, tente novamente."
             }
 
     def get_similar_questions(self, query: str, limit: int = 5) -> List[str]:

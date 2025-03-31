@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     API_KEY_NVIDEA: str = ""
     #API_KEY: Optional[str] = None
     
+    # LLM
+    LLM_MODEL: str = "meta/llama3-70b-instruct"
+    
     # Configuração do modelo de embeddings
     EMBEDDING_MODEL: str = "intfloat/multilingual-e5-large-instruct"
     EMBEDDING_DIMENSION: int = 1024

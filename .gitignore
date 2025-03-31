@@ -8,6 +8,8 @@
 backend/documents/
 backend/rag-cta-value
 
+IA.md
+
 # Python
 **/__pycache__/
 **/*.py[cod]
@@ -107,3 +109,4 @@ backend/rag-cta-value
 
 # Docker
 **/.docker/data/
+.aider*

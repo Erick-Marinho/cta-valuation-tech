@@ -13,7 +13,7 @@ from processors.chunkers.semantic_chunker import create_semantic_chunks, evaluat
 from db.repositories.document_repository import DocumentoRepository
 from db.repositories.chunk_repository import ChunkRepository
 from utils.logging import track_timing
-from utils.metrics_prometheus import DOCUMENT_PROCESSING_COUNT, CHUNK_SIZE_DISTRIBUTION, CHUNKING_QUALITY_METRICS
+from utils.metrics_prometheus import record_document_processing,record_chunk_size, record_extraction_time, record_chunking_quality
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,7 @@ class DocumentService:
         """
         
         processing_start = time.time()
+        suggested_strategy = chunk_strategy # Usar a variável da assinatura
         
         try:
             # 1. Criar instância de documento
@@ -104,26 +105,24 @@ class DocumentService:
             
             if not db_document_id:
                 # Registrar erro de salvamento no banco de dados
-                DOCUMENT_PROCESSING_COUNT.labels(
-                    status='error-db_save',
-                    file_type=file_type
-                ).inc()
-                
+                record_document_processing('error-db_save', file_type)
                 raise DocumentProcessingError(f"Erro ao salvar documento {file_name} no banco de dados")
             
             document.id = db_document_id
             
             # 3. Extrair texto conforme o tipo de arquivo
+            extraction_start = time.time()
+            
             if document.is_pdf:
                 # Extrair texto e metadados do PDF
                 text, pdf_metadata, structure = PDFExtractor.extract_all(file_content)
                 
-                # registrar sucesso na extração
-                DOCUMENT_PROCESSING_COUNT.labels(
-                    status='success',
-                    file_type='pdf'
-                ).inc()
+                extraction_time = time.time() - extraction_start
+                record_extraction_time(extraction_time, 'pdf')  # Métrica Prometheus
                 
+                # Registrar sucesso *da extração*
+                record_document_processing('success_extraction', 'pdf') # Status mais específico
+                                
                 # Atualizar metadados com informações do PDF
                 document.metadata.update({
                     "pdf_metadata": pdf_metadata,
@@ -134,40 +133,33 @@ class DocumentService:
                 DocumentoRepository.atualizar_metadados(document.id, document.metadata)
             else:
                 # Registrar erro de tipo não suportado
-                DOCUMENT_PROCESSING_COUNT.labels(
-                    status='error-unsupported_type',
-                    file_type=file_type
-                ).inc()
-                
+                record_document_processing('error-unsupported_type', file_type)
+                                
                 # Para outros tipos de arquivo (implementação futura)
                 raise DocumentProcessingError(f"Tipo de arquivo não suportado: {file_type}")
             
             # 4. Determinar a melhor estratégia de chunking se estiver configurado como "auto"
-            if chunking_strategy == "auto":
+            if chunk_strategy == "auto":
                 suggested_strategy = self._determine_document_type(file_name, document.metadata)
                 logger.info(f"Estratégia de chunking sugerida para {file_name}: {suggested_strategy}")
-            else:
-                suggested_strategy = chunking_strategy
-            
-            # 4. Dividir o texto em chunks
-            chunk_size = self.settings.CHUNK_SIZE
-            chunk_overlap = self.settings.CHUNK_OVERLAP
             
             # 5. Chunking com a estratégia selecionada
+            chunk_size = self.settings.CHUNK_SIZE
+            chunk_overlap = self.settings.CHUNK_OVERLAP
+            chunking_start = time.time()
+            
             chunks = create_semantic_chunks(
                 text, 
                 chunk_size=chunk_size, 
                 chunk_overlap=chunk_overlap,
                 strategy=suggested_strategy
             )
+            
+            chunking_time = time.time() - chunking_start
                         
             if not chunks:
                 # Registrar erro de chunking
-                DOCUMENT_PROCESSING_COUNT.labels(
-                    status='warning_no_chunks',
-                    file_type=file_type
-                ).inc()
-                
+                record_document_processing('warning_no_chunks', file_type)                
                 logger.warning(f"Nenhum chunk extraído do documento {file_name}")
                 return document
             
@@ -175,10 +167,11 @@ class DocumentService:
             quality_metrics = evaluate_chunk_quality(chunks, text)
             
             # Registrar métricas de qualidade
-            CHUNKING_QUALITY_METRICS.labels(
-                strategy=suggested_strategy,
-                file_type=file_type
-            ).observe(quality_metrics["avg_coherence"])
+            record_chunking_quality(
+                quality_metrics["avg_coherence"], # Assumindo que avg_coherence é o score principal
+                suggested_strategy,
+                file_type
+            )
             
             logger.info(
                 f"Chunking concluído para {file_name}. "
@@ -189,37 +182,33 @@ class DocumentService:
             
             # Registra distrinuição de tamanho de chunks
             for chunk in chunks:
-                # Registro por caracteres
-                CHUNK_SIZE_DISTRIBUTION.labels(
-                    type='chars'
-                ).observe(len(chunk))
-                
-                # Registro por tokens (palavras como aproximação)
-                CHUNK_SIZE_DISTRIBUTION.labels(
-                    type='tokens'
-                ).observe(len(chunk.split()))
+                record_chunk_size(len(chunk), 'chars')
+                record_chunk_size(len(chunk.split()), 'tokens')
             
             
-            # 5. Gerar embeddings em lote para os chunks
+            # 7. Gerar embeddings em lote para os chunks
             embeddings = self.embedding_service.embed_batch(chunks)
             
             # 6. Criar e armazenar chunks no banco de dados
             chunks_data = []
             for i, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
+                # Adicionar score de qualidade aos metadados do chunk
+                chunk_metadata = {
+                    "documento": file_name,
+                    "chunk_index": i,
+                    "total_chunks": len(chunks),
+                    "texto_tamanho": len(chunk_text),
+                    "chunking_strategy": suggested_strategy,
+                    "chunk_quality_coherence": quality_metrics.get('avg_coherence') # Salvar score específico
+                    # Adicionar outros scores se houver: quality_metrics.get('avg_separation') etc.
+                }
                 chunk_data = {
                     "documento_id": document.id,
                     "texto": chunk_text,
                     "embedding": embedding,
                     "pagina": None,  # Implementação futura: mapear para páginas
                     "posicao": i,
-                    "metadados": {
-                        "documento": file_name,
-                        "chunk_index": i,
-                        "total_chunks": len(chunks),
-                        "texto_tamanho": len(chunk_text),
-                        "chunking_strategy": suggested_strategy,
-                        "chunk_quality": quality_metrics["avg_coherence"]
-                    }
+                    "metadados": chunk_metadata
                 }
                 chunks_data.append(chunk_data)
             
@@ -228,11 +217,8 @@ class DocumentService:
             document.processed = successful_chunks > 0
             
             # Registrar sucesso no processamento completo
-            DOCUMENT_PROCESSING_COUNT.labels(
-                status='success_complete',
-                file_type=file_type
-            ).inc()
-            
+            record_document_processing('success_complete', file_type) # Usar função auxiliar
+
             processing_time = time.time() - processing_start            
             logger.info(
                 f"Documento {file_name} processado com sucesso: {successful_chunks} chunks criados"
@@ -240,16 +226,15 @@ class DocumentService:
                 f"usando estratégia {suggested_strategy}"
                 )
             
+            record_document_processing('success_complete', file_type)
+            
             return document
             
         except Exception as e:
             # registrar erro genérico no processamento
-            DOCUMENT_PROCESSING_COUNT.labels(
-                status='error_processing',
-                file_type=file_type
-            ).inc()
+            record_document_processing('error_processing', file_type)
             
-            logger.error(f"Erro ao processar documento {file_name}: {str(e)}")
+            logger.error(f"Erro ao processar documento {file_name}: {str(e)}", exc_info=True)
             raise DocumentProcessingError(f"Erro ao processar documento: {str(e)}")
     
     @track_timing
