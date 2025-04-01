@@ -49,9 +49,12 @@ services:
     environment:
       - WATCHFILES_FORCE_POLLING=true # Força o polling em sistemas que não suportam inotify
       - WATCHFILES_POLL_INTERVAL=0.1 # Intervalo de polling em segundos
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
     depends_on:
       postgres:
         condition: service_healthy
+      tempo:
+        condition: service_started
     healthcheck:
       test: ['CMD', 'curl', '-f', 'http://localhost:8000/health/ping']
       interval: 10s
@@ -103,8 +106,68 @@ services:
       - 8.8.8.8
       - 8.8.4.4
 
+  tempo:
+    image: grafana/tempo:latest
+    container_name: tempo
+    user: '0:0'
+    command: ['-config.file=/etc/tempo.yaml']
+    volumes:
+      - ./tempo/tempo-config.yaml:/etc/tempo.yaml
+      - tempo_data:/var/lib/tempo
+    ports:
+      - '4317:4317'
+      - '4318:4318'
+      - '3200:3200'
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'wget',
+          '--no-verbose',
+          '--tries=1',
+          '--spider',
+          'http://localhost:3200/status',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - '3001:3000'
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+      - tempo
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'wget',
+          '--no-verbose',
+          '--tries=1',
+          '--spider',
+          'http://localhost:3000',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
 volumes:
   postgres_data:
   node_modules:
   pgadmin_data:
   prometheus_data:
+  tempo_data:
+  grafana_data:

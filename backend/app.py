@@ -33,7 +33,7 @@ async def lifespan(app: FastAPI):
     """
     try:
         # Inicializar OpenTelemetry antes de tudo
-        setup_telemetry("cta-value-tech")
+        setup_telemetry()
         logger.info("OpenTelemetry inicializado com sucesso")
         
         # Configurar banco de dados
@@ -61,9 +61,6 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
-
-# Instrumentar a aplicação para OpenTelemetry
-FastAPIInstrumentor.instrument_app(app)
 
 #Criar app de métricas e inicializar info
 metrics_app = create_metrics_app()
@@ -120,6 +117,9 @@ async def metrics_middleware(request: Request, call_next):
 
 # Incluir rotas da API
 app.include_router(main_router)
+
+# Instrumentar a aplicação DEPOIS de incluir as rotas
+FastAPIInstrumentor.instrument_app(app)
 
 # Iniciar aplicação se executada diretamente
 if __name__ == "__main__":

@@ -12,6 +12,8 @@ from utils.metrics_prometheus import record_retrieval_time, record_documents_ret
 # Importar telemetria
 from utils.telemetry import get_tracer
 from opentelemetry import trace
+from opentelemetry.trace import SpanKind, Status, StatusCode
+from opentelemetry.semconv.trace import SpanAttributes as SemanticSpanAttributes
 
 logger = logging.getLogger(__name__)
 # Obter tracer para este módulo
@@ -59,15 +61,9 @@ ORDER BY
 LIMIT %s
 """
 
-# Consulta para obter o score de similaridade de um chunk específico
-GET_SIMILARITY_SCORE_QUERY = """
-SELECT 
-    1 - (cv.embedding <=> %s::vector) as similarity_score
-FROM 
-    chunks_vetorizados cv
-WHERE 
-    cv.id = %s
-"""
+# Consulta para obter o score de similaridade de um chunk específico (Template)
+# Usaremos esta forma para atributos, evitando expor dados diretamente
+GET_SIMILARITY_SCORE_QUERY_TEMPLATE = "SELECT 1 - (embedding <=> %s::vector) as score FROM chunks_vetorizados WHERE id = %s"
 
 @track_timing
 def realizar_busca_hibrida(query_text: str, query_embedding: List[float], 
@@ -96,131 +92,190 @@ def realizar_busca_hibrida(query_text: str, query_embedding: List[float],
     
     start_time_total = time.time()
     
-    # Iniciar span para rastrear a busca híbrida completa
-    with tracer.start_as_current_span("realizar_busca_hibrida") as span:
-        # Registrar parâmetros da busca
-        span.set_attribute("query.text", query_text)
-        span.set_attribute("query.embedding_size", len(query_embedding))
-        span.set_attribute("search.limite", limite)
-        span.set_attribute("search.alpha", alpha)
-        
+    # Refinar span principal da busca híbrida
+    with tracer.start_as_current_span(
+        "db.hybrid_search", # Nome mais indicativo da camada
+        kind=SpanKind.INTERNAL # Orquestra chamadas DB, mas é interno ao serviço
+    ) as span:
+        # Atributos gerais da operação
+        span.set_attribute("db.system", "postgresql") # Sistema de DB
+        span.set_attribute("app.search.query_text", query_text) # Usar prefixo 'app' para dados da aplicação
+        span.set_attribute("app.search.embedding_provided", bool(query_embedding))
+        span.set_attribute("app.search.limit", limite)
+        span.set_attribute("app.search.alpha", alpha)
+        span.set_attribute("app.search.threshold", threshold or get_settings().SEARCH_THRESHOLD)
         if filtro_documentos:
-            span.set_attribute("search.filter_docs_count", len(filtro_documentos))
+            span.set_attribute("app.search.filter_docs_count", len(filtro_documentos))
         if strategy_filter:
-            span.set_attribute("search.strategy_filter", strategy_filter)
-        
-        settings = get_settings()
-        
-        if threshold is None:
-            threshold = settings.SEARCH_THRESHOLD
-        span.set_attribute("search.threshold", threshold)
-        
+            span.set_attribute("app.search.strategy_filter", strategy_filter)
+        # if filtro_metadados: # Adicionar se implementado
+        #    span.set_attribute("app.search.filter_metadata_keys", str(list(filtro_metadados.keys())))
+
+        settings = get_settings() # Mover para dentro se threshold for None
+        effective_threshold = threshold if threshold is not None else settings.SEARCH_THRESHOLD
+        span.set_attribute("app.search.effective_threshold", effective_threshold) # Registrar threshold efetivo
+
         try:
-            # Construir cláusulas de filtro se necessário
-            filter_clause = ""
+            # Construção de cláusulas de filtro (manter lógica)
+            filter_clause_sql = ""
             filter_params_vector = []
             filter_params_text = []
             where_conditions = []
-            
+
             if filtro_documentos:
                 placeholders = ', '.join(['%s'] * len(filtro_documentos))
                 where_conditions.append(f"cv.documento_id IN ({placeholders})")
                 filter_params_vector.extend(filtro_documentos)
                 filter_params_text.extend(filtro_documentos)
-                
-            # Filtro por estratégia de chunking
+
             if strategy_filter:
                 where_conditions.append("cv.metadados->>'chunking_strategy' = %s")
                 filter_params_vector.append(strategy_filter)
                 filter_params_text.append(strategy_filter)
-            
-            if filtro_metadados:
-                # Construir condições JSONB para filtragem por metadados
-                # Exemplo: WHERE cv.metadados @> '{"chave": "valor"}'::jsonb
-                # Isso seria uma implementação mais complexa que exigiria
-                # construção dinâmica de queries JSONB
-                pass
-            
-            # Combinar condições em uma cláusula WHERE
+
+            # Combinar condições
             if where_conditions:
-                filter_clause = "WHERE " + " AND ".join(where_conditions)
-            
-            # Parâmetros completos para as consultas
-            vector_params = [query_embedding] + filter_params_vector + [query_embedding, 20]
-            text_params = [query_text, query_text] + filter_params_text + [20]
-            
-            # Executar consulta vetorial
+                filter_clause_sql = "WHERE " + " AND ".join(where_conditions)
+            span.set_attribute("db.sql.filter_clause", filter_clause_sql) # Adicionar cláusula ao span
+
+            # Limite maior para busca inicial
+            initial_limit = limite * 3 # Buscar mais para processamento posterior
+            span.set_attribute("db.sql.initial_limit", initial_limit)
+
+            vector_params = [query_embedding] + filter_params_vector + [query_embedding, initial_limit]
+            text_params = [query_text, query_text] + filter_params_text + [initial_limit]
+
+            # Instrumentar chamada da busca vetorial
             vector_start_time = time.time()
-            
-            with tracer.start_as_current_span("busca_vetorial") as vector_span:
-                vector_span.set_attribute("query.filter_clause", filter_clause)
-                vector_query = VECTOR_SEARCH_QUERY.format(
-                    filter_clause=filter_clause
-                )
-                vector_rows = execute_query(vector_query, vector_params)
-                
+            vector_rows = []
+            with tracer.start_as_current_span(
+                "db.vector_search", # Nome específico da operação
+                kind=SpanKind.CLIENT # Representa uma chamada ao DB
+            ) as vector_span:
+                vector_query_formatted = VECTOR_SEARCH_QUERY.format(filter_clause=filter_clause_sql)
+                # Adicionar atributos semânticos do DB
+                vector_span.set_attribute(SemanticSpanAttributes.DB_SYSTEM, "postgresql")
+                vector_span.set_attribute(SemanticSpanAttributes.DB_OPERATION, "SELECT vector_similarity")
+                vector_span.set_attribute(SemanticSpanAttributes.DB_STATEMENT, VECTOR_SEARCH_QUERY) # Query template
+                vector_span.set_attribute(SemanticSpanAttributes.DB_SQL_TABLE, "chunks_vetorizados")
+                vector_span.set_attribute("db.sql.params_count", len(vector_params))
+                vector_span.set_attribute("db.sql.limit", initial_limit)
+
+                try:
+                    vector_rows = execute_query(vector_query_formatted, vector_params)
+                    vector_span.set_attribute("db.result_rows", len(vector_rows))
+                    vector_span.set_status(Status(StatusCode.OK))
+                except Exception as db_exc:
+                    vector_span.record_exception(db_exc)
+                    vector_span.set_status(Status(StatusCode.ERROR, description=str(db_exc)))
+                    vector_span.set_attribute("error.type", type(db_exc).__name__)
+                    raise # Re-lançar para ser pego pelo try/except externo
+
             vector_elapsed = time.time() - vector_start_time
-            record_retrieval_time(vector_elapsed, 'vector')  # Métrica Prometheus
-            
-            # Executar consulta textual
+            record_retrieval_time(vector_elapsed, 'vector') # Métrica Prometheus
+
+            # Instrumentar chamada da busca textual
             text_start_time = time.time()
-            
-            with tracer.start_as_current_span("busca_textual") as text_span:
-                text_filter_clause = " AND ".join(where_conditions) if where_conditions else ""
-                text_query = TEXT_SEARCH_QUERY.format(
-                    filter_clause=f"AND {text_filter_clause}" if text_filter_clause else ""
-                )
-                text_rows = execute_query(text_query, text_params)
-            
+            text_rows = []
+            with tracer.start_as_current_span(
+                 "db.text_search",
+                 kind=SpanKind.CLIENT
+            ) as text_span:
+                 text_filter_clause_sql = f"AND {filter_clause_sql}" if filter_clause_sql else "" # Ajuste da lógica original
+                 text_query_formatted = TEXT_SEARCH_QUERY.format(filter_clause=text_filter_clause_sql) # Usar versão formatada da cláusula
+                 # Adicionar atributos semânticos do DB
+                 text_span.set_attribute(SemanticSpanAttributes.DB_SYSTEM, "postgresql")
+                 text_span.set_attribute(SemanticSpanAttributes.DB_OPERATION, "SELECT text_rank")
+                 text_span.set_attribute(SemanticSpanAttributes.DB_STATEMENT, TEXT_SEARCH_QUERY) # Query template
+                 text_span.set_attribute(SemanticSpanAttributes.DB_SQL_TABLE, "chunks_vetorizados")
+                 text_span.set_attribute("db.sql.params_count", len(text_params))
+                 text_span.set_attribute("db.sql.limit", initial_limit)
+
+                 try:
+                    text_rows = execute_query(text_query_formatted, text_params)
+                    text_span.set_attribute("db.result_rows", len(text_rows))
+                    text_span.set_status(Status(StatusCode.OK))
+                 except Exception as db_exc:
+                    text_span.record_exception(db_exc)
+                    text_span.set_status(Status(StatusCode.ERROR, description=str(db_exc)))
+                    text_span.set_attribute("error.type", type(db_exc).__name__)
+                    raise # Re-lançar
+
             text_elapsed = time.time() - text_start_time
-            record_retrieval_time(text_elapsed, 'text')  # Métrica Prometheus
-            
-            # Processar resultados
+            record_retrieval_time(text_elapsed, 'text') # Métrica Prometheus
+
+            # Refinar span de processamento e adicionar span para get_similarity_score
             process_start_time = time.time()
-            
-            with tracer.start_as_current_span("processar_resultados") as process_span:
-                combined_results = {}
-                
-                # Adicionar resultados da busca vetorial
+            with tracer.start_as_current_span(
+                "db.process_hybrid_results",
+                kind=SpanKind.INTERNAL
+            ) as process_span:
+                combined_results: Dict[int, Chunk] = {} # Tipagem
+
+                # Adicionar resultados vetoriais
                 for row in vector_rows:
                     chunk_id = row['id']
+                    # Idealmente, Chunk.from_db_row não faria I/O, mas se fizer, precisa de tracing lá
                     chunk = Chunk.from_db_row(row)
                     combined_results[chunk_id] = chunk
-                
-                # Adicionar ou atualizar resultados da busca textual
+                process_span.set_attribute("results.vector_count", len(vector_rows))
+
+                # Adicionar/atualizar resultados textuais
+                new_chunks_from_text = 0
+                similarity_lookup_count = 0
                 for row in text_rows:
                     chunk_id = row['id']
-                    text_score = float(row['text_score'])
-                    
+                    text_score = float(row['text_score']) if row.get('text_score') is not None else 0.0
+
                     if chunk_id in combined_results:
-                        # Atualizar texto score para chunks já encontrados
                         combined_results[chunk_id].text_score = text_score
                     else:
-                        # Buscar score de similaridade para novos chunks
-                        with tracer.start_as_current_span("get_similarity_score") as sim_span:
-                            sim_span.set_attribute("chunk.id", chunk_id)
-                            similarity_row = execute_query_single_result(
-                                GET_SIMILARITY_SCORE_QUERY,
-                                (query_embedding, chunk_id)
-                            )
-                            
-                            similarity_score = 0.0
-                            if similarity_row and 'similarity_score' in similarity_row:
-                                similarity_score = float(similarity_row['similarity_score'])
-                                sim_span.set_attribute("similarity_score", similarity_score)
-                        
+                        new_chunks_from_text += 1
+                        similarity_score = 0.0
+                        # Instrumentar busca de similaridade para chunks só textuais
+                        similarity_lookup_start = time.time()
+                        with tracer.start_as_current_span(
+                             "db.get_similarity_for_text_chunk",
+                             kind=SpanKind.CLIENT
+                        ) as sim_span:
+                            sim_span.set_attribute("app.chunk_id", chunk_id) # ID do chunk buscado
+                            sim_span.set_attribute(SemanticSpanAttributes.DB_SYSTEM, "postgresql")
+                            sim_span.set_attribute(SemanticSpanAttributes.DB_OPERATION, "SELECT vector_similarity")
+                            sim_span.set_attribute(SemanticSpanAttributes.DB_STATEMENT, GET_SIMILARITY_SCORE_QUERY_TEMPLATE) # Usar template
+                            sim_span.set_attribute(SemanticSpanAttributes.DB_SQL_TABLE, "chunks_vetorizados")
+
+                            try:
+                                similarity_row = execute_query_single_result(
+                                    GET_SIMILARITY_SCORE_QUERY_TEMPLATE,
+                                    (query_embedding, chunk_id)
+                                )
+                                similarity_lookup_count += 1
+                                if similarity_row and 'similarity_score' in similarity_row:
+                                    similarity_score = float(similarity_row['similarity_score'])
+                                sim_span.set_attribute("db.result_score", similarity_score)
+                                sim_span.set_status(Status(StatusCode.OK))
+                            except Exception as db_exc:
+                                sim_span.record_exception(db_exc)
+                                sim_span.set_status(Status(StatusCode.ERROR, description=str(db_exc)))
+                                sim_span.set_attribute("error.type", type(db_exc).__name__)
+                                # Não relançar aqui, continuar com score 0.0
+
                         chunk = Chunk.from_db_row(row)
                         chunk.similarity_score = similarity_score
                         combined_results[chunk_id] = chunk
-                        
-                process_span.set_attribute("combined_results.count", len(combined_results))
-                
+
+                process_span.set_attribute("results.text_count", len(text_rows))
+                process_span.set_attribute("results.new_chunks_from_text", new_chunks_from_text)
+                process_span.set_attribute("results.similarity_lookups", similarity_lookup_count)
+                process_span.set_attribute("results.combined_initial_count", len(combined_results))
+
+                # Registrar métricas de score (manter)
                 for chunk in combined_results.values():
                     record_retrieval_score(chunk.similarity_score, 'vector')
                     if hasattr(chunk, 'text_score') and chunk.text_score > 0:
                         record_retrieval_score(chunk.text_score, 'text')
                 
-                #Calcular scores combinados
+                # Calcular scores combinados (manter lógica)
                 for chunk in combined_results.values():
                     # Normalizar text_score
                     norm_text_score = min(getattr(chunk, 'text_score', 0.0), 1.0) # Usar getattr com default
@@ -231,61 +286,54 @@ def realizar_busca_hibrida(query_text: str, query_embedding: List[float],
                     # Registrar score combinado
                     record_retrieval_score(chunk.combined_score, 'hybrid')
                 
-                # Contar total de resultados antes do filtro de threshold
-                total_resultados = len(combined_results)
-                
-                # Filtro de threshold    
-                filtered_chunks = [chunk for chunk in combined_results.values()
-                                if chunk.combined_score >= threshold]
-                
-                # Registrar impacto do threshold
+                # Filtro de threshold (manter lógica)
+                total_resultados_before_threshold = len(combined_results)
+                filtered_chunks = [chunk for chunk in combined_results.values() if chunk.combined_score >= effective_threshold]
                 retained_count = len(filtered_chunks)
-                filtered_count = total_resultados - retained_count
+                filtered_count = total_resultados_before_threshold - retained_count
+                process_span.set_attribute("results.before_threshold_count", total_resultados_before_threshold)
+                process_span.set_attribute("results.after_threshold_count", retained_count)
+                process_span.set_attribute("results.filtered_by_threshold_count", filtered_count)
+                # Registrar métricas Prometheus de threshold (manter)
                 if retained_count > 0:
                     record_threshold_filtering(action='retained', count=retained_count)
                 if filtered_count > 0:
                     record_threshold_filtering(action='filtered', count=filtered_count)
                 
-                # Ordenar e limitar resultados
-                sorted_chunks = sorted(
-                    filtered_chunks, 
-                    key=lambda x: x.combined_score, 
-                    reverse=True
-                )[:limite]
-                    
-                logger.info(f"Query text: '{query_text}'")
-                logger.info(f"Resultados antes do filtro de threshold: {len(combined_results)}")
-                logger.info(f"Threshold aplicado: {threshold}")
-                logger.info(f"Resultados após filtro de threshold: {len(filtered_chunks)}")
-                logger.info(f"Resultado variavel: {limite}")
-                
-                # Log detalhado para depuração
-                for i, chunk in enumerate(sorted_chunks[:min(3, len(sorted_chunks))]):
-                    chunking_strategy = chunk.metadados.get('chunking_strategy', 'desconhecida') if chunk.metadados else 'desconhecida'
-                    logger.debug(
-                        f"Top {i+1}: id={chunk.id}, score={chunk.combined_score:.4f}, "
-                        f"estratégia={chunking_strategy}, "
-                        f"texto={chunk.texto[:50]}..."
-                    )
-                    
+                # Ordenar e limitar (manter lógica)
+                sorted_chunks = sorted(filtered_chunks, key=lambda x: x.combined_score, reverse=True)[:limite]
+                process_span.set_attribute("results.final_count", len(sorted_chunks))
+                if sorted_chunks:
+                    process_span.set_attribute("results.top_score", sorted_chunks[0].combined_score)
+                    process_span.set_attribute("results.lowest_score", sorted_chunks[-1].combined_score)
+
                 process_elapsed = time.time() - process_start_time
-                record_retrieval_time(process_elapsed, 'process')  # Métrica Prometheus
-            
-                # Registrar total de documentos recuperados
-                record_documents_retrieved(len(sorted_chunks))
-            
-                # Registrar tempo total
-                total_elapsed = time.time() - start_time_total
-                record_retrieval_time(total_elapsed, 'total')  # Métrica Prometheus
-                
-                return sorted_chunks
-                
+                record_retrieval_time(process_elapsed, 'process') # Métrica Prometheus
+                process_span.set_attribute("duration_ms", int(process_elapsed * 1000))
+                process_span.set_status(Status(StatusCode.OK))
+
+
+            # Registrar métricas finais (manter)
+            record_documents_retrieved(len(sorted_chunks))
+            total_elapsed = time.time() - start_time_total
+            record_retrieval_time(total_elapsed, 'total') # Métrica Prometheus
+
+            # Adicionar atributos finais ao span principal
+            span.set_attribute("results.final_count", len(sorted_chunks))
+            span.set_attribute("duration_ms", int(total_elapsed * 1000))
+            span.set_status(Status(StatusCode.OK)) # Marcar OK no span principal
+
+            return sorted_chunks
+
         except Exception as e:
-            # Registrar erro no span
+            total_elapsed = time.time() - start_time_total # Calcular tempo mesmo em erro
+            logger.error(f"Erro na busca híbrida: {e}", exc_info=True)
+            # Registrar erro no span principal
             span.record_exception(e)
-            span.set_status(trace.Status(trace.StatusCode.ERROR, f"Erro: {e}"))
-            
-            logger.error(f"Erro na busca híbrida avançada: {e}")
+            span.set_status(Status(StatusCode.ERROR, description=str(e)))
+            span.set_attribute("error.type", type(e).__name__)
+            span.set_attribute("duration_ms", int(total_elapsed * 1000))
+
             return []
 
 
@@ -303,51 +351,58 @@ def rerank_results(chunks: List[Chunk], query_text: str) -> List[Chunk]:
     """
     
     start_time = time.time()
-    # Iniciar span para rastrear o reranking
-    with tracer.start_as_current_span("rerank_results") as span:
-        span.set_attribute("chunks.count", len(chunks) if chunks else 0)
-        span.set_attribute("query.text", query_text)
-        
-        # Implementação simplificada que poderia ser expandida
-        # para usar modelos externos de reranking mais sofisticados
-        
+    # Refinar span principal de reranking
+    with tracer.start_as_current_span(
+        "db.rerank_results", # Manter prefixo db? Ou app? Talvez app.rerank_results
+        kind=SpanKind.INTERNAL # É processamento interno
+    ) as span:
+        initial_count = len(chunks)
+        span.set_attribute("app.rerank.initial_count", initial_count)
+        span.set_attribute("app.rerank.query_text", query_text)
+
         if not chunks:
-            span.set_attribute("results.empty", True)
+            span.set_attribute("app.rerank.final_count", 0)
+            span.set_status(Status(StatusCode.OK, "Lista de chunks vazia."))
             return []
-        
-        # Por enquanto, apenas refina os scores com base em heurísticas simples
+
+        # Refinar span de heurísticas (se mantido)
+        # Considerar remover este span interno se for muito granular/rápido
         for chunk in chunks:
-            with tracer.start_as_current_span("apply_heuristics") as heuristic_span:
-                heuristic_span.set_attribute("chunk.id", chunk.id)
-                heuristic_span.set_attribute("original_score", chunk.combined_score)
-                
-                # Heurística 1: Valorizar documentos onde o termo de busca aparece primeiro
+             with tracer.start_as_current_span("db.rerank_apply_heuristics") as heuristic_span:
+                heuristic_span.set_attribute("app.chunk_id", chunk.id)
+                original_score = chunk.combined_score
+                heuristic_span.set_attribute("app.rerank.original_score", original_score)
+
+                # Lógica de heurísticas (manter)
+                # ... (código das heurísticas: position_boost, length_penalty, strategy_boost, quality_boost) ...
+                # Adicionar atributos para cada boost/penalty calculado ao heuristic_span
+                # heuristic_span.set_attribute("app.rerank.heuristic.position_boost", position_boost)
+                # ... etc ...
                 position_boost = 0.0
                 if query_text.lower() in chunk.texto.lower():
                     position = chunk.texto.lower().find(query_text.lower())
                     # Quanto mais próximo do início, maior o boost (máximo 0.05)
                     position_boost = max(0, 0.05 * (1 - position / len(chunk.texto)))
-                    heuristic_span.set_attribute("position_boost", position_boost)
+                    heuristic_span.set_attribute("app.rerank.heuristic.position_boost", position_boost)
                 
-                # Heurística 2: Valorizar chunks mais concisos (dentro de limites razoáveis)
                 length_penalty = 0.0
                 ideal_length = 500  # Tamanho ideal em caracteres
                 actual_length = len(chunk.texto)
                 if actual_length > ideal_length * 3:
                     # Penalizar chunks muito longos
                     length_penalty = min(0.03, (actual_length - ideal_length * 3) / 10000)
-                    heuristic_span.set_attribute("length_penalty", length_penalty)
+                    heuristic_span.set_attribute("app.rerank.heuristic.length_penalty", length_penalty)
                 
                 # 3. Boost baseado na estratégia de chunking (preferência contextual)
                 strategy_boost = 0.0
                 if chunk.metadados and 'chunking_strategy' in chunk.metadados:
                     strategy = chunk.metadados['chunking_strategy']
-                    heuristic_span.set_attribute("chunking_strategy", strategy)
+                    heuristic_span.set_attribute("app.rerank.heuristic.chunking_strategy", strategy)
                     
                     # Tipo de consulta baseado no comprimento e estrutura
                     query_words = query_text.split()
                     is_specific_query = len(query_words) > 5 or '?' in query_text
-                    heuristic_span.set_attribute("is_specific_query", is_specific_query)
+                    heuristic_span.set_attribute("app.rerank.heuristic.is_specific_query", is_specific_query)
                     
                     if is_specific_query and strategy == "header_based":
                         # Consultas específicas funcionam melhor com chunks baseados em cabeçalhos
@@ -359,7 +414,7 @@ def rerank_results(chunks: List[Chunk], query_text: str) -> List[Chunk]:
                         # Híbrido é geralmente um bom meio termo
                         strategy_boost = 0.01
                     
-                    heuristic_span.set_attribute("strategy_boost", strategy_boost)
+                    heuristic_span.set_attribute("app.rerank.heuristic.strategy_boost", strategy_boost)
                         
                 # 4. Boost baseado na qualidade do chunk
                 quality_boost = 0.0
@@ -367,27 +422,31 @@ def rerank_results(chunks: List[Chunk], query_text: str) -> List[Chunk]:
                     # Qualidade é um valor entre 0 e 1
                     quality = float(chunk.metadados['chunk_quality'])
                     quality_boost = quality * 0.04  # Máximo de 4%
-                    heuristic_span.set_attribute("quality_boost", quality_boost)
+                    heuristic_span.set_attribute("app.rerank.heuristic.quality_boost", quality_boost)
                 
                 # Aplicar todos os ajustes
                 total_adjustment = position_boost + strategy_boost + quality_boost - length_penalty
-                heuristic_span.set_attribute("total_adjustment", total_adjustment)
-                
-                # Registrar score original e ajustado
-                original_score = chunk.combined_score
-                chunk.combined_score = chunk.combined_score * (1 + total_adjustment)
-                heuristic_span.set_attribute("adjusted_score", chunk.combined_score)
-                
-                record_retrieval_score(chunk.combined_score, 'reranked')
-        
-        # Reordenar com base nos scores ajustados
+                chunk.combined_score = original_score * (1 + total_adjustment)
+
+                heuristic_span.set_attribute("app.rerank.total_adjustment", total_adjustment)
+                heuristic_span.set_attribute("app.rerank.adjusted_score", chunk.combined_score)
+                heuristic_span.set_status(Status(StatusCode.OK))
+
+             # Registrar métrica Prometheus (manter)
+             record_retrieval_score(chunk.combined_score, 'reranked')
+
+        # Reordenar (manter)
         result = sorted(chunks, key=lambda x: x.combined_score, reverse=True)
-        
-        # Registrar métricas no span principal
-        if result:
-            span.set_attribute("results.top_score", result[0].combined_score)
-        
+
         elapsed_time = time.time() - start_time
-        record_retrieval_time(elapsed_time, 'rerank')  # Métrica Prometheus
+        record_retrieval_time(elapsed_time, 'rerank') # Métrica Prometheus
+
+        # Atributos finais do span principal rerank
+        span.set_attribute("app.rerank.final_count", len(result))
+        if result:
+            span.set_attribute("app.rerank.top_score", result[0].combined_score)
+            span.set_attribute("app.rerank.lowest_score", result[-1].combined_score)
+        span.set_attribute("duration_ms", int(elapsed_time * 1000))
+        span.set_status(Status(StatusCode.OK))
 
         return result

@@ -3,6 +3,7 @@ Configurações centralizadas para a aplicação CTA Value Tech.
 """
 
 from pydantic_settings import BaseSettings
+from pydantic import Field
 from functools import lru_cache
 from typing import Optional
 import os
@@ -77,6 +78,16 @@ class Settings(BaseSettings):
     
     #Logging
     LOG_LEVEL: str = "INFO"
+    
+    # Configurações OpenTelemetry
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = Field(
+        default=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"),
+        description="OTLP Exporter endpoint (gRPC or HTTP)."
+    )
+    OTEL_SERVICE_NAME: str = Field(
+        default=os.getenv("OTEL_SERVICE_NAME", "cta-value-tech-rag"),
+        description="Service name for OpenTelemetry."
+    )
     
     class Config:
         env_file = ".env"
