@@ -1,0 +1,37 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus_ds # UID único para referência
+    url: http://prometheus:9090 # Endereço do serviço Prometheus no Docker
+    access: proxy # Grafana faz a requisição em nome do usuário
+    isDefault: true # Definir como fonte de dados padrão
+    jsonData:
+      timeInterval: '5s' # Intervalo padrão para queries
+      exemplars: # Habilitar exemplars (links de métricas para traces)
+        - name: traceID
+          labelName: trace_id
+          datasourceUid: tempo_ds # UID da datasource Tempo (definida abaixo)
+
+  - name: Tempo
+    type: tempo
+    uid: tempo_ds # UID único para referência
+    url: http://tempo:3200 # Endereço do serviço Tempo no Docker (porta HTTP)
+    access: proxy
+    jsonData:
+      serviceMap: # Habilita Service Map (requer metrics_generator no Tempo)
+        datasourceUid: prometheus_ds # UID da datasource Prometheus
+      search: # Configurações de busca
+        hide: false # Mostrar busca por padrão
+      tracesToMetrics: # Configuração para pular de traces para métricas
+        datasourceUid: prometheus_ds # UID da datasource Prometheus
+        tags: [{ key: 'service.name', value: 'service' }, { key: 'job' }]
+        queries:
+          - name: 'Request Rate'
+            query: 'sum(rate(traces_spanmetrics_calls_total{$$__tags}[5m])) by ($$__tags)'
+          - name: 'Error Rate'
+            query: 'sum(rate(traces_spanmetrics_calls_total{status_code="ERROR", $$__tags}[5m])) by ($$__tags) / sum(rate(traces_spanmetrics_calls_total{$$__tags}[5m])) by ($$__tags)'
+          - name: 'Request Latency (P95)'
+            query: 'histogram_quantile(0.95, sum(rate(traces_spanmetrics_latency_bucket{$$__tags}[5m])) by (le, $$__tags))'
+        # Adicione mais queries conforme necessário

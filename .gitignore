@@ -8,7 +8,7 @@
 backend/documents/
 backend/rag-cta-value
 
-backend/chunks_outputs/
+IA.md
 
 # Python
 **/__pycache__/
@@ -109,3 +109,4 @@ backend/chunks_outputs/
 
 # Docker
 **/.docker/data/
+.aider*

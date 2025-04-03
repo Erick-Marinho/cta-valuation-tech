@@ -3,6 +3,7 @@ Configurações centralizadas para a aplicação CTA Value Tech.
 """
 
 from pydantic_settings import BaseSettings
+from pydantic import Field
 from functools import lru_cache
 from typing import Optional
 from pydantic import Field
@@ -40,6 +41,9 @@ class Settings(BaseSettings):
     API_KEY_NVIDEA: str = ""
     #API_KEY: Optional[str] = None
     
+    # LLM
+    LLM_MODEL: str = "meta/llama3-70b-instruct"
+    
     # Configuração do modelo de embeddings
     EMBEDDING_MODEL: str = "intfloat/multilingual-e5-large-instruct"
     EMBEDDING_DIMENSION: int = 1024
@@ -75,6 +79,19 @@ class Settings(BaseSettings):
     
     #Logging
     LOG_LEVEL: str = "INFO"
+    
+    # OpenAI
+    OPENAI_API_KEY: Optional[str] = None
+    
+    # Configurações OpenTelemetry
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = Field(
+        default=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"),
+        description="OTLP Exporter endpoint (gRPC or HTTP)."
+    )
+    OTEL_SERVICE_NAME: str = Field(
+        default=os.getenv("OTEL_SERVICE_NAME", "cta-value-tech-rag"),
+        description="Service name for OpenTelemetry."
+    )
     
     class Config:
         env_file = ".env"

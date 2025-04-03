@@ -6,7 +6,7 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from core.services.rag_service import get_rag_service, RAGService
 from core.config import get_settings, Settings
-from utils.rag_metrics import record_response_feedback
+from utils.metrics_prometheus import record_user_feedback
 
 # Modelos de dados para requisições e respostas
 class ChatQuery(BaseModel):
@@ -132,7 +132,8 @@ async def submit_feedback(
     """
     try:
         # Registrar feedback nas métricas
-        record_response_feedback(feedback.is_helpful)
+        rating = "positive" if feedback.is_helpful else "negative"
+        record_user_feedback(rating)
         
         # Aqui você pode salvar o feedback em um banco de dados para análise posterior
         # Isso seria importante para melhorias futuras
