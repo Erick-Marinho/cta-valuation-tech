@@ -69,7 +69,7 @@ class RAGService:
             clean_query_text = clean_query(query)
             if not clean_query_text:
                 return {"response": "Não entendi sua consulta. Pode reformulá-la?"}
-
+            
             # 2. Gerar embedding da consulta
             query_embedding = self.embedding_service.embed_text(clean_query_text)
 
@@ -87,8 +87,7 @@ class RAGService:
             estimated_tokens = len(query.split())
             record_tokens_processed(estimated_tokens, "query")
             
-
-            
+             
             retrieved_chunks = realizar_busca_hibrida(
                 query_text=clean_query_text,
                 query_embedding=query_embedding,
@@ -121,28 +120,17 @@ class RAGService:
                 logger.warning(
                     f"Nenhum documento relevante encontrado para a consulta: '{query}'"
                 )
-                                
-                # 4. Reranking para melhorar a relevância
-                ranked_chunks = rerank_results(retrieved_chunks, clean_query_text)
-                
-                # 5. Preparar contexto para o LLM
-                context = ""
-                
-                if not ranked_chunks:
-                    logger.warning(f"Nenhum documento relevante encontrado para a consulta: '{query}'")
-                    context = "Não foram encontrados documentos relevantes para esta consulta específica."
-                else:
-                    for i, chunk in enumerate(ranked_chunks):
-                        context += f"Contexto {i+1} [relevância: {chunk.combined_score:.2f}]\n{chunk.texto}\n\n"
-                
-                # 6. Construir o prompt para o LLM
-                system_prompt = f"""Você é um assistente especializado em valoração de tecnologias relacionadas ao Patrimônio Genético Nacional e Conhecimentos Tradicionais Associados.
+                context = "Não foram encontrados documentos relevantes para esta consulta específica."
+            else:
+                for i, chunk in enumerate(ranked_chunks):
+                    context += f"Contexto {i+1} [relevância: {chunk.combined_score:.2f}]\n{chunk.texto}\n\n"
+            
+            # 6. Construir o prompt para o LLM
+            system_prompt = f"""Você é um assistente especializado em valoração de tecnologias relacionadas ao Patrimônio Genético Nacional e Conhecimentos Tradicionais Associados.
 
-                Responda à pergunta do usuário usando as informações fornecidas nos documentos do contexto. Cada contexto tem uma pontuação de relevância associada a ele - contextos com pontuação mais alta são mais relevantes para a pergunta do usuário.
+            Responda à pergunta do usuário usando as informações fornecidas nos documentos do contexto. Cada contexto tem uma pontuação de relevância associada a ele - contextos com pontuação mais alta são mais relevantes para a pergunta do usuário.
 
-                IMPORTANTE: Não mencione os "contextos" ou "documentos" na sua resposta. O usuário não sabe que você está consultando diferentes fontes. Apresente a informação de forma natural e fluida.
-
-                Se realmente não houver informações suficientes nos contextos para responder adequadamente, você pode indicar isso de forma sutil, sugerindo que há limitações nas informações disponíveis, mas tente sempre fornecer valor com o que você tem.
+            IMPORTANTE: Não mencione os "contextos" ou "documentos" na sua resposta. O usuário não sabe que você está consultando diferentes fontes. Apresente a informação de forma natural e fluida.
 
             Se realmente não houver informações suficientes nos contextos para responder adequadamente, você pode indicar isso de forma sutil, sugerindo que há limitações nas informações disponíveis, mas tente sempre fornecer valor com o que você tem.
 

@@ -96,6 +96,7 @@ def realizar_busca_hibrida(query_text: str, query_embedding: List[float],
         filter_clause = ""
         filter_params_vector = []
         filter_params_text = []
+        where_conditions = []
         
         if filtro_documentos:
             placeholders = ', '.join(['%s'] * len(filtro_documentos))

@@ -329,8 +329,9 @@ def create_semantic_chunks(
     final_chunks = []
     for chunk in chunks:
         # Normalizar o texto do chunk
-        clean_chunk = normalize_text(chunk)
-        
+        no_stopwords_chunk = remove_stopwords(chunk)
+        clean_chunk = normalize_text(no_stopwords_chunk)
+
         # Verificar se o chunk tem conteúdo significativo
         if len(clean_chunk.strip()) > 50:  # Ignorar chunks muito pequenos
             final_chunks.append(clean_chunk)
