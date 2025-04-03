@@ -326,7 +326,8 @@ class RAGService:
                         "sources": [chunk.arquivo_origem for chunk in final_chunks],
                         "scores": [round(chunk.combined_score, 3) for chunk in final_chunks],
                         "chunking_strategies": chunk_strategies,
-                        "threshold": adjusted_threshold
+                        "threshold": adjusted_threshold,
+                        "contexts": [chunk.texto for chunk in final_chunks]
                     }
                     result["debug_info"] = debug_info
 

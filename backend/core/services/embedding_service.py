@@ -303,15 +303,19 @@ class EmbeddingService:
 
             hit_ratio = self._cache_hits / max(1, self._cache_hits + self._cache_misses)
             update_embedding_cache_metrics('hit_ratio', hit_ratio)
-            span.set_attribute("cache.hit_ratio", hit_ratio)
 
             elapsed_time = time.time() - start_time
             record_embedding_time(elapsed_time, operation_type='batch')
-            span.set_attribute("duration_ms", int(elapsed_time * 1000))
-            if final_embeddings:
-                 span.set_attribute("vector.dimension", len(final_embeddings[0]))
-            if span.status.status_code != StatusCode.ERROR:
-                 span.set_status(Status(StatusCode.OK))
+
+            if span.is_recording():
+                span.set_attribute("cache.hit_ratio", hit_ratio)
+                span.set_attribute("duration_ms", int(elapsed_time * 1000))
+                if final_embeddings:
+                     span.set_attribute("vector.dimension", len(final_embeddings[0]))
+
+                current_status = getattr(span, 'status', None)
+                if current_status is None or current_status.status_code != StatusCode.ERROR:
+                     span.set_status(Status(StatusCode.OK))
 
             return final_embeddings
     

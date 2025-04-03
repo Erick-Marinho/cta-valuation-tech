@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     #Logging
     LOG_LEVEL: str = "INFO"
     
+    # OpenAI
+    OPENAI_API_KEY: Optional[str] = None
+    
     # Configurações OpenTelemetry
     OTEL_EXPORTER_OTLP_ENDPOINT: str = Field(
         default=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"),

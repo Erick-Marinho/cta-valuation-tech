@@ -149,55 +149,55 @@ class DocumentService:
                 
                 # 3. Extrair texto conforme o tipo de arquivo
                 extraction_start = time.time()
-                extraction_span = self.tracer.start_as_current_span("document.extract_text", kind=SpanKind.INTERNAL)
-                extraction_span.set_attribute("document.type", document.file_type)
-                try:
-                    if document.is_pdf:
-                        # Extrair texto e metadados do PDF
-                        text, pdf_metadata, structure = PDFExtractor.extract_all(file_content)
-                        extraction_span.set_attribute("extraction.tool", "PDFExtractor")
-                        extraction_span.set_attribute("extraction.text_length", len(text))
-                        extraction_span.set_attribute("extraction.metadata_found", bool(pdf_metadata))
-                        extraction_span.set_attribute("extraction.structure_found", bool(structure))
-                        extraction_span.set_status(Status(StatusCode.OK))
+                with self.tracer.start_as_current_span("document.extract_text", kind=SpanKind.INTERNAL) as extraction_actual_span:
+                    extraction_actual_span.set_attribute("document.type", document.file_type)
+                    try:
+                        if document.is_pdf:
+                            # Extrair texto e metadados do PDF
+                            text, pdf_metadata, structure = PDFExtractor.extract_all(file_content)
+                            extraction_actual_span.set_attribute("extraction.tool", "PDFExtractor")
+                            extraction_actual_span.set_attribute("extraction.text_length", len(text))
+                            extraction_actual_span.set_attribute("extraction.metadata_found", bool(pdf_metadata))
+                            extraction_actual_span.set_attribute("extraction.structure_found", bool(structure))
+                            extraction_actual_span.set_status(Status(StatusCode.OK))
 
-                        # Atualizar metadados com informações do PDF
-                        document.metadata.update({
-                            "pdf_metadata": pdf_metadata or {}, # Garantir dict
-                            "document_structure": structure or {} # Garantir dict
-                        })
+                            # Atualizar metadados com informações do PDF
+                            document.metadata.update({
+                                "pdf_metadata": pdf_metadata or {}, # Garantir dict
+                                "document_structure": structure or {} # Garantir dict
+                            })
 
-                        # Atualizar metadados no banco
-                        with self.tracer.start_as_current_span("db.update_metadata", kind=SpanKind.CLIENT) as meta_update_span:
-                            meta_update_span.set_attribute(SpanAttributes.DB_SYSTEM, "postgresql")
-                            meta_update_span.set_attribute(SpanAttributes.DB_OPERATION, "UPDATE")
-                            meta_update_span.set_attribute(SpanAttributes.DB_SQL_TABLE, "documentos_originais")
-                            meta_update_span.set_attribute("db.document_id", document.id)
-                            try:
-                                 DocumentoRepository.atualizar_metadados(document.id, document.metadata)
-                                 meta_update_span.set_status(Status(StatusCode.OK))
-                            except Exception as db_meta_exc:
-                                 meta_update_span.record_exception(db_meta_exc)
-                                 meta_update_span.set_status(Status(StatusCode.ERROR, str(db_meta_exc)))
-                                 logger.warning(f"Falha ao atualizar metadados no DB para doc {document.id}: {db_meta_exc}") # Logar, mas não parar o processo?
+                            # Atualizar metadados no banco
+                            with self.tracer.start_as_current_span("db.update_metadata", kind=SpanKind.CLIENT) as meta_update_span:
+                                meta_update_span.set_attribute(SpanAttributes.DB_SYSTEM, "postgresql")
+                                meta_update_span.set_attribute(SpanAttributes.DB_OPERATION, "UPDATE")
+                                meta_update_span.set_attribute(SpanAttributes.DB_SQL_TABLE, "documentos_originais")
+                                meta_update_span.set_attribute("db.document_id", document.id)
+                                try:
+                                     DocumentoRepository.atualizar_metadados(document.id, document.metadata)
+                                     meta_update_span.set_status(Status(StatusCode.OK))
+                                except Exception as db_meta_exc:
+                                     meta_update_span.record_exception(db_meta_exc)
+                                     meta_update_span.set_status(Status(StatusCode.ERROR, str(db_meta_exc)))
+                                     logger.warning(f"Falha ao atualizar metadados no DB para doc {document.id}: {db_meta_exc}") # Logar, mas não parar o processo?
 
-                    else:
-                        # Registrar erro de tipo não suportado
-                        extraction_span.set_status(Status(StatusCode.ERROR, f"Tipo de arquivo não suportado: {file_type}"))
-                        record_document_processing('error_unsupported_type', file_type)
-                                
-                        # Para outros tipos de arquivo (implementação futura)
-                        raise DocumentProcessingError(f"Tipo de arquivo não suportado: {file_type}")
+                        else:
+                            # Registrar erro de tipo não suportado
+                            extraction_actual_span.set_status(Status(StatusCode.ERROR, f"Tipo de arquivo não suportado: {file_type}"))
+                            record_document_processing('error_unsupported_type', file_type)
+                                    
+                            # Para outros tipos de arquivo (implementação futura)
+                            raise DocumentProcessingError(f"Tipo de arquivo não suportado: {file_type}")
 
-                    extraction_time = time.time() - extraction_start
-                    record_extraction_time(extraction_time, document.file_type) # Métrica
-                    extraction_span.set_attribute("duration_ms", int(extraction_time * 1000))
-                    record_document_processing('success_extraction', document.file_type) # Métrica
+                        extraction_time = time.time() - extraction_start
+                        record_extraction_time(extraction_time, document.file_type) # Métrica
+                        extraction_actual_span.set_attribute("duration_ms", int(extraction_time * 1000))
+                        record_document_processing('success_extraction', document.file_type) # Métrica
 
-                except Exception as e:
-                    extraction_span.record_exception(e)
-                    extraction_span.set_status(Status(StatusCode.ERROR, str(e)))
-                    raise # Relançar
+                    except Exception as e:
+                        extraction_actual_span.record_exception(e)
+                        extraction_actual_span.set_status(Status(StatusCode.ERROR, str(e)))
+                        raise # Relançar
 
                 span.set_attribute("document.extracted_text_length", len(text))
 

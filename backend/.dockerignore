@@ -1,0 +1,27 @@
+    # Dockerfile e arquivos relacionados que não precisam estar na imagem final
+    Dockerfile
+    .dockerignore
+
+    # Ambientes virtuais e caches Python
+    **/venv
+    **/.venv
+    **/__pycache__
+    **.pytest_cache
+    **.mypy_cache
+    *.pyc
+    
+    # Diretório problemático específico (dentro do contexto 'backend')
+    rag-cta-value/ 
+
+    # Outros arquivos/diretórios que geralmente não são necessários na imagem
+    .git/
+    .vscode/
+    *.md 
+    *.log
+    .env # Não copie o .env diretamente para a imagem por segurança
+    docs/ # Se os documentos .md não forem necessários em runtime
+    evaluation/ # Se os scripts e datasets de avaliação não precisam estar na imagem de produção final (mas precisamos deles agora)
+                # Podemos comentar esta linha por enquanto para poder rodar o script
+
+    # Arquivos específicos
+    setup.py # Se não for usado para instalar o pacote dentro do Docker
