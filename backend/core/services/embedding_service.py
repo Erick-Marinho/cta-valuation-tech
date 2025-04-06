@@ -4,6 +4,7 @@ Serviço para geração e manipulação de embeddings.
 import time
 import logging
 from typing import List, Dict, Any, Optional
+from processors.embedders.EmbedderBase import EmbedderInterface
 from langchain_huggingface import HuggingFaceEmbeddings
 from core.config import get_settings
 from processors.normalizers.text_normalizer import clean_text_for_embedding
@@ -27,7 +28,7 @@ class EmbeddingService:
     - Fornecer métricas e logging
     """
     
-    def __init__(self):
+    def __init__(self, embedder: EmbedderInterface):
         """
         Inicializa o serviço de embeddings.
         """
@@ -42,9 +43,9 @@ class EmbeddingService:
             init_span.set_attribute("cache.type", "in_memory")
             init_span.set_attribute("cache.max_size", 10000)
 
-            self._initialize_model()
+            self._initialize_model(embedder)
         
-    def _initialize_model(self):
+    def _initialize_model(self, embedder: EmbedderInterface):
         """
         Inicializa o modelo de embeddings.
         """
@@ -61,11 +62,12 @@ class EmbeddingService:
                 logger.info(f"Inicializando modelo de embeddings: {model_name} no dispositivo: {device}")
 
                 model_init_start = time.time()
-                self.model = HuggingFaceEmbeddings(
-                    model_name=model_name,
-                    model_kwargs={"device": device},
-                    encode_kwargs={"normalize_embeddings": True}
-                )
+                self.model = embedder
+                # self.model = HuggingFaceEmbeddings(
+                #     model_name=model_name,
+                #     model_kwargs={"device": device},
+                #     encode_kwargs={"normalize_embeddings": True}
+                # )
                 model_init_duration = time.time() - model_init_start
                 span.set_attribute("model.initialization_time_ms", int(model_init_duration * 1000))
 
@@ -377,8 +379,23 @@ def get_embedding_service() -> EmbeddingService:
         EmbeddingService: Instância do serviço
     """
     global _embedding_service_instance
+
     
     if _embedding_service_instance is None:
-        _embedding_service_instance = EmbeddingService()
+        embedder: EmbedderInterface
+
+        if get_settings().EMBEDDING_TYPE == "huggingface":
+            from processors.embedders.HuggingFaceEmbedder import HuggingFaceEmbedder
+            settings = get_settings()
+            model_name = settings.EMBEDDING_MODEL
+            device = "cpu"
+            embedder = HuggingFaceEmbedder(model_name=model_name, device=device)
+
+        if get_settings().EMBEDDING_TYPE == "openai":
+            # TODO: Implementar suporte para embeddings da OpenAI no futuro
+            # Outros modelos de embedding podem ser adicionados aqui conforme necessário
+            pass
+
+        _embedding_service_instance = EmbeddingService(embedder)
     
     return _embedding_service_instance

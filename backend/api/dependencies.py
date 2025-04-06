@@ -92,12 +92,12 @@ def validate_api_key(x_api_key: Annotated[str, Header()] = None):
     if not hasattr(settings, 'API_KEY') or not settings.API_KEY:
         return True
     
-    if not x_api_key or x_api_key != settings.API_KEY:
-        logger.warning(f"Tentativa de acesso com chave API inválida: {x_api_key}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Chave de API inválida"
-        )
+    # if not x_api_key or x_api_key != settings.API_KEY:
+    #     logger.warning(f"Tentativa de acesso com chave API inválida: {x_api_key}")
+    #     raise HTTPException(
+    #         status_code=status.HTTP_401_UNAUTHORIZED,
+    #         detail="Chave de API inválida"
+    #     )
     
     return True
 

@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "meta/llama3-70b-instruct"
     
     # Configuração do modelo de embeddings
+    EMBEDDING_TYPE: str = "huggingface"
+    
     EMBEDDING_MODEL: str = "intfloat/multilingual-e5-large-instruct"
     EMBEDDING_DIMENSION: int = 1024
     USE_GPU: bool = False
