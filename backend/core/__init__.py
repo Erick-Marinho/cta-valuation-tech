@@ -12,9 +12,9 @@ from .services.rag_service import get_rag_service
 from .services.document_service import get_document_service
 
 __all__ = [
-    'get_settings',
-    'get_embedding_service',
-    'get_llm_service',
-    'get_rag_service',
-    'get_document_service'
+    "get_settings",
+    "get_embedding_service",
+    "get_llm_service",
+    "get_rag_service",
+    "get_document_service",
 ]

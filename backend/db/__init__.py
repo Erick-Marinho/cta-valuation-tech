@@ -2,12 +2,12 @@
 Inicialização do módulo de banco de dados.
 Fornece acesso direto aos principais componentes.
 """
+
 import logging
 
 # Configuração de logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
 # Importações para facilitar o acesso
@@ -17,14 +17,10 @@ from .connection import (
     close_connection,
     execute_query,
     execute_query_single_result,
-    execute_transaction
+    execute_transaction,
 )
 
-from .schema import (
-    setup_database,
-    check_database_version,
-    is_database_healthy
-)
+from .schema import setup_database, check_database_version, is_database_healthy
 
 # Importação de modelos
 from .models.document import Documento
@@ -37,26 +33,24 @@ from .repositories.chunk_repository import ChunkRepository
 # Exportar para facilitar imports
 __all__ = [
     # Connection
-    'get_connection',
-    'get_cursor',
-    'close_connection',
-    'execute_query',
-    'execute_query_single_result',
-    'execute_transaction',
-    
+    "get_connection",
+    "get_cursor",
+    "close_connection",
+    "execute_query",
+    "execute_query_single_result",
+    "execute_transaction",
     # Schema
-    'setup_database',
-    'check_database_version',
-    'is_database_healthy',
-    
+    "setup_database",
+    "check_database_version",
+    "is_database_healthy",
     # Models
-    'Documento',
-    'Chunk',
-    
+    "Documento",
+    "Chunk",
     # Repositories
-    'DocumentoRepository',
-    'ChunkRepository',
+    "DocumentoRepository",
+    "ChunkRepository",
 ]
+
 
 # Inicialização automática ao importar o módulo
 def initialize_db():
@@ -70,7 +64,9 @@ def initialize_db():
     except Exception as e:
         logging.error(f"Erro ao inicializar banco de dados: {e}")
 
+
 # Inicialização automática se solicitada via variável de ambiente
 import os
+
 if os.getenv("AUTO_INIT_DB", "false").lower() == "true":
     initialize_db()

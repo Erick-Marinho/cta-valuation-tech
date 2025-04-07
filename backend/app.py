@@ -1,13 +1,18 @@
 """
 Ponto de entrada principal da aplicação CTA Value Tech.
 """
+
 import time
 import uvicorn
 import logging
 from fastapi import FastAPI, Request
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
-from utils.metrics_prometheus import HTTP_REQUESTS_TOTAL, REQUEST_LATENCY, update_system_metrics
+from utils.metrics_prometheus import (
+    HTTP_REQUESTS_TOTAL,
+    REQUEST_LATENCY,
+    update_system_metrics,
+)
 from utils.telemetry import setup_telemetry
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
@@ -25,6 +30,7 @@ logger = logging.getLogger(__name__)
 # Obter configurações
 settings = get_settings()
 
+
 # Definir lifespan da aplicação
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -35,22 +41,23 @@ async def lifespan(app: FastAPI):
         # Inicializar OpenTelemetry antes de tudo
         setup_telemetry()
         logger.info("OpenTelemetry inicializado com sucesso")
-        
+
         # Configurar banco de dados
         logger.info("Inicializando banco de dados...")
         setup_database()
-        
+
         if not is_database_healthy():
             logger.error("Banco de dados não está saudável!")
         else:
             logger.info("Banco de dados inicializado com sucesso!")
-            
+
     except Exception as e:
         logger.error(f"Erro ao inicializar banco de dados: {e}")
-    
+
     logger.info("Application is starting...")
     yield
     logger.info("Application is shutting down...")
+
 
 # Criar aplicação FastAPI
 app = FastAPI(
@@ -59,10 +66,10 @@ app = FastAPI(
     version=settings.APP_VERSION,
     lifespan=lifespan,
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
 )
 
-#Criar app de métricas e inicializar info
+# Criar app de métricas e inicializar info
 metrics_app = create_metrics_app()
 init_app_info(settings.APP_NAME, settings.APP_VERSION)
 app.mount("/metrics", metrics_app)
@@ -76,16 +83,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.middleware("http")
-async def metrics_middleware(request: Request, call_next):    
-    
+async def metrics_middleware(request: Request, call_next):
+
     # Atualizar métricas do sistema
     update_system_metrics()
-    
+
     # Registrar início da requisição
     start_time = time.time()
-    status_code = 500 # Default para caso de erro inesperado antes da resposta
-    
+    status_code = 500  # Default para caso de erro inesperado antes da resposta
+
     # Processar a requisição
     try:
         response = await call_next(request)
@@ -93,27 +101,23 @@ async def metrics_middleware(request: Request, call_next):
     except Exception as e:
         logger.exception("Erro não tratado durante a requisição")
         status_code = 500
-        raise # Re-lançar exceção para ser tratada pelo FastAPI
+        raise  # Re-lançar exceção para ser tratada pelo FastAPI
     finally:
         # Métricas que são registradas mesmo em caso de erro
         endpoint = request.url.path
         method = request.method
-        
-    # 1. Incrementar contador de requisições
+
+        # 1. Incrementar contador de requisições
         HTTP_REQUESTS_TOTAL.labels(
-            method=method, 
-            endpoint=endpoint, 
-            status=str(status_code)
+            method=method, endpoint=endpoint, status=str(status_code)
         ).inc()
-    
-    # 2. Registrar latência
+
+        # 2. Registrar latência
         request_time = time.time() - start_time
-        REQUEST_LATENCY.labels(
-            method=method, 
-            endpoint=endpoint
-        ).observe(request_time)
-    
+        REQUEST_LATENCY.labels(method=method, endpoint=endpoint).observe(request_time)
+
     return response
+
 
 # Incluir rotas da API
 app.include_router(main_router)

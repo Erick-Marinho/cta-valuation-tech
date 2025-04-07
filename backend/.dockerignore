@@ -12,6 +12,7 @@
     
     # Diretório problemático específico (dentro do contexto 'backend')
     rag-cta-value/ 
+    .cache/
 
     # Outros arquivos/diretórios que geralmente não são necessários na imagem
     .git/
