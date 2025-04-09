@@ -33,7 +33,7 @@ def setup_telemetry(service_name="cta-value-tech"):
     Returns:
         tracer: Um tracer configurado para criar spans
     """
-    from core.config import get_settings
+    from config.config import get_settings
 
     global _telemetry_initialized
     if _telemetry_initialized:

@@ -4,16 +4,17 @@ Endpoints para monitoramento de saúde da aplicação.
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Annotated
 import logging
 import time
 import os
 import platform
 import psutil
-from core.config import get_settings, Settings
-from db.schema import is_database_healthy
-from core.services.embedding_service import get_embedding_service, EmbeddingService
-from core.services.llm_service import get_llm_service, LLMService
+from config.config import get_settings, Settings
+from shared.exceptions import ServiceUnavailableError
+from application.interfaces.embedding_provider import EmbeddingProvider
+from application.interfaces.llm_provider import LLMProvider
+from interface.api.dependencies import get_embedding_provider, get_llm_provider, verify_db_health, SessionDep
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +42,21 @@ class MetricsResponse(BaseModel):
 router = APIRouter(prefix="/health", tags=["health"])
 
 
+# Dependências Anotadas
+SettingsDep = Annotated[Settings, Depends(get_settings)]
+LLMProviderDep = Annotated[LLMProvider, Depends(get_llm_provider)]
+EmbeddingProviderDep = Annotated[EmbeddingProvider, Depends(get_embedding_provider)]
+# SessionDep já deve estar definido em dependencies.py
+
+
 @router.get("/", response_model=HealthResponse)
 async def health_check(
-    settings: Settings = Depends(get_settings),
-    embedding_service: EmbeddingService = Depends(get_embedding_service),
-    llm_service: LLMService = Depends(get_llm_service),
+    settings: SettingsDep,
+    # Injetar SessionDep para verificar o DB
+    session: SessionDep,
+    # Injetar LLMProvider para verificar se inicializa (não verificaremos resposta)
+    llm_provider: LLMProviderDep,
+    embedding_provider: EmbeddingProviderDep,
 ):
     """
     Verifica a saúde geral da aplicação e seus componentes.
@@ -53,41 +64,50 @@ async def health_check(
     Returns:
         HealthResponse: Status de saúde da aplicação
     """
-    # Verificar componentes
-    db_healthy = is_database_healthy()
+    start_time = time.time()
+    component_status = {}
+    overall_ok = True
 
-    # Tentar gerar um embedding de teste
-    embedding_healthy = True
+    # 1. Verificar Banco de Dados
     try:
-        _ = embedding_service.embed_text("teste de saúde")
-    except Exception as e:
-        logger.error(f"Erro no serviço de embeddings: {e}")
-        embedding_healthy = False
+        await verify_db_health(session) # Usa a função de dependência que já valida
+        component_status["database"] = {"status": "healthy"}
+    except HTTPException as http_exc: # Captura o 503 de verify_db_health
+        component_status["database"] = {"status": "unhealthy", "error": str(http_exc.detail)}
+        overall_ok = False
+    except Exception as db_exc:
+        logger.error(f"Falha inesperada na verificação de saúde do DB: {db_exc}", exc_info=True)
+        component_status["database"] = {"status": "unhealthy", "error": "Internal error checking DB"}
+        overall_ok = False
 
-    # Status geral baseado em todos os componentes
-    overall_status = "healthy" if db_healthy and embedding_healthy else "unhealthy"
+    # 2. Verificar Embedding Provider (se inicializou)
+    if embedding_provider:
+         component_status["embedding_service"] = {"status": "healthy", "model": settings.EMBEDDING_MODEL}
+    else:
+         # Se a dependência falhar, FastAPI retornaria erro antes, mas adicionamos por segurança
+         component_status["embedding_service"] = {"status": "unhealthy", "error": "Provider not initialized"}
+         overall_ok = False
+
+    # 3. Verificar LLM Provider (se inicializou)
+    if llm_provider:
+         component_status["llm_service"] = {"status": "healthy", "provider": "nvidia"} # Ou obter de settings/provider
+    else:
+         component_status["llm_service"] = {"status": "unhealthy", "error": "Provider not initialized"}
+         overall_ok = False
 
     return HealthResponse(
-        status=overall_status,
+        status="healthy" if overall_ok else "unhealthy",
         version=settings.APP_VERSION,
-        timestamp=time.time(),
-        components={
-            "database": {"status": "healthy" if db_healthy else "unhealthy"},
-            "embedding_service": {
-                "status": "healthy" if embedding_healthy else "unhealthy",
-                "model": settings.EMBEDDING_MODEL,
-            },
-            "llm_service": {
-                "status": "unknown"  # Não testamos o LLM diretamente para evitar custos
-            },
-        },
+        timestamp=start_time,
+        components=component_status,
     )
 
 
 @router.get("/metrics", response_model=MetricsResponse)
 async def metrics(
-    embedding_service: EmbeddingService = Depends(get_embedding_service),
-    llm_service: LLMService = Depends(get_llm_service),
+    embedding_provider: EmbeddingProviderDep,
+    # llm_provider: LLMProviderDep, # O LLMProvider não tem get_metrics
+    session: SessionDep # Para verificar DB
 ):
     """
     Retorna métricas de desempenho e uso da aplicação.
@@ -96,10 +116,8 @@ async def metrics(
         MetricsResponse: Métricas de desempenho
     """
     try:
-        # Métricas do sistema
         process = psutil.Process(os.getpid())
-        memory_usage = process.memory_info().rss / (1024 * 1024)  # Em MB
-
+        memory_usage = process.memory_info().rss / (1024 * 1024)
         system_metrics = {
             "memory_usage_mb": round(memory_usage, 2),
             "cpu_percent": process.cpu_percent(interval=0.1),
@@ -108,18 +126,27 @@ async def metrics(
             "platform": platform.platform(),
         }
 
-        # Métricas de embedding
-        embedding_metrics = embedding_service.get_cache_stats()
+        embedding_metrics = {}
+        if hasattr(embedding_provider, 'get_cache_stats'):
+            try:
+                embedding_metrics = embedding_provider.get_cache_stats()
+            except Exception as emb_exc:
+                logger.warning(f"Não foi possível obter métricas de embedding: {emb_exc}")
+                embedding_metrics = {"error": "failed to get stats"}
+        else:
+            embedding_metrics = {"status": "stats not available"}
 
-        # Métricas de LLM
-        llm_metrics = llm_service.get_metrics()
+        # Métricas LLM (Placeholder - o provider atual não tem get_metrics)
+        llm_metrics = {"status": "metrics not available from provider"}
 
-        # Métricas de banco de dados (simplificado)
-        db_metrics = {
-            "status": "healthy" if is_database_healthy() else "unhealthy",
-            # Em uma implementação real, poderíamos adicionar mais métricas
-            # como número de conexões, tempo de resposta, etc.
-        }
+        # Métricas DB (Verifica status)
+        db_status = "unknown"
+        try:
+             await verify_db_health(session)
+             db_status = "healthy"
+        except Exception:
+             db_status = "unhealthy"
+        db_metrics = {"status": db_status}
 
         return MetricsResponse(
             system=system_metrics,
@@ -129,10 +156,8 @@ async def metrics(
         )
 
     except Exception as e:
-        logger.error(f"Erro ao coletar métricas: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Erro ao coletar métricas: {str(e)}"
-        )
+        logger.error(f"Erro ao coletar métricas: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Erro ao coletar métricas: {str(e)}")
 
 
 @router.get("/ping")

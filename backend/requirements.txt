@@ -8,11 +8,11 @@ langchain-core==0.3.43
 langchain-huggingface==0.1.2
 langchain-text-splitters==0.3.6
 sentence-transformers==3.4.1
-psycopg2-binary==2.9.10
+asyncpg>=0.29.0
 openai==1.65.4
 python-multipart==0.0.6
 tiktoken==0.9.0
-pydantic-settings>=2.4.0,<3.0.0  # Ajustado para atender langchain-community
+pydantic-settings>=2.4.0,<3.0.0  
 psutil==5.9.5
 pytest==7.4.0
 pytest-asyncio==0.21.1
@@ -20,9 +20,13 @@ prometheus-client==0.17.1
 opentelemetry-api>=1.15.0
 opentelemetry-sdk>=1.15.0
 opentelemetry-exporter-otlp>=1.15.0
-opentelemetry-instrumentation-fastapi>=0.38b0
+opentelemetry-instrumentation-fastapi>=0.38
 ragas==0.2.14
 deepeval==2.6.6
 google-generativeai
 accelerate
 mlflow
+alembic>=1.13.0
+psycopg[binary]
+sqlmodel>=0.0.16 
+pgvector>=0.1.8

@@ -5,6 +5,7 @@ Ponto de entrada principal da aplicação CTA Value Tech.
 import time
 import uvicorn
 import logging
+import asyncpg
 from fastapi import FastAPI, Request
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,11 +18,17 @@ from utils.telemetry import setup_telemetry
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 # Importações dos módulos da aplicação
-from core.config import get_settings
+from config.config import get_settings
 from api.router import main_router
-from db.schema import setup_database, is_database_healthy
+# TODO: Refatorar db.schema para usar asyncpg
+# from db.schema import setup_database, is_database_healthy
 from utils.logging import configure_logging
 from utils.metrics_prometheus import create_metrics_app, init_app_info
+
+# --- Importações SQLAlchemy/SQLModel Async ---
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+# -------------------------------------------
 
 # Configurar logging
 configure_logging()
@@ -30,33 +37,54 @@ logger = logging.getLogger(__name__)
 # Obter configurações
 settings = get_settings()
 
+# Variável global para o pool (ou usar app.state diretamente)
+# DB_POOL: asyncpg.Pool = None # Opcional, app.state é preferível
 
-# Definir lifespan da aplicação
+# --- Gerenciador de Ciclo de Vida com Engine Async ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Gerenciador de contexto para o ciclo de vida da aplicação.
-    """
+    # Código a ser executado ANTES da aplicação iniciar
+    logger.info("Iniciando aplicação...")
+    settings = get_settings()
+
+    # Criar Async Engine SQLAlchemy
+    logger.info("Criando Async Engine SQLAlchemy...")
+    # Garantir que a URL use o driver asyncpg
+    db_url = settings.DATABASE_URL
+    if db_url.startswith("postgresql://"):
+        db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
     try:
-        # Inicializar OpenTelemetry antes de tudo
-        setup_telemetry()
-        logger.info("OpenTelemetry inicializado com sucesso")
+        # echo=True é útil para debug, mostra SQL gerado
+        engine = create_async_engine(db_url, echo=settings.DEBUG, future=True)
+        # Armazenar a engine no estado da aplicação para ser acessada pelas dependências
+        app.state.db_engine = engine
+        logger.info("Async Engine SQLAlchemy criada com sucesso.")
 
-        # Configurar banco de dados
-        logger.info("Inicializando banco de dados...")
-        setup_database()
-
-        if not is_database_healthy():
-            logger.error("Banco de dados não está saudável!")
-        else:
-            logger.info("Banco de dados inicializado com sucesso!")
+        # Testar conexão (opcional, mas recomendado)
+        async with engine.connect() as conn:
+             logger.info("Conexão inicial com o banco de dados estabelecida.")
 
     except Exception as e:
-        logger.error(f"Erro ao inicializar banco de dados: {e}")
+        logger.exception(f"Falha ao criar Async Engine ou conectar ao banco: {e}")
+        # Você pode querer impedir a inicialização se o DB não estiver disponível
+        raise RuntimeError(f"Falha na inicialização do banco de dados: {e}") from e
 
-    logger.info("Application is starting...")
-    yield
-    logger.info("Application is shutting down...")
+    # Inicializar OpenTelemetry
+    try:
+        setup_telemetry() # Chamar sem argumentos
+        logger.info("OpenTelemetry inicializado com sucesso")
+    except Exception as e:
+        logger.error(f"Falha ao inicializar OpenTelemetry: {e}")
+
+    yield # Aplicação roda aqui
+
+    # Código a ser executado APÓS a aplicação parar
+    logger.info("Encerrando aplicação...")
+    if hasattr(app.state, 'db_engine') and app.state.db_engine:
+        logger.info("Dispondo da Async Engine SQLAlchemy...")
+        await app.state.db_engine.dispose()
+        logger.info("Async Engine disposta.")
 
 
 # Criar aplicação FastAPI
@@ -64,7 +92,7 @@ app = FastAPI(
     title=settings.APP_NAME,
     description="API para valoração de tecnologias relacionadas ao Patrimônio Genético Nacional e Conhecimentos Tradicionais Associados",
     version=settings.APP_VERSION,
-    lifespan=lifespan,
+    lifespan=lifespan, # <-- Usar o lifespan definido acima
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -129,4 +157,5 @@ FastAPIInstrumentor.instrument_app(app)
 if __name__ == "__main__":
     port = settings.PORT
     logger.info(f"Iniciando aplicação na porta {port}...")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # host="0.0.0.0" é importante para Docker, mantenha
+    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=settings.DEBUG) # Usar app:app para reload

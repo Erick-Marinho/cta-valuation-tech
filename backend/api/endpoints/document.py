@@ -16,10 +16,13 @@ from fastapi.responses import JSONResponse
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 import logging
-from core.services.document_service import get_document_service, DocumentService
-from core.models.document import Document
-from core.config import get_settings, Settings
-from ..dependencies import validate_api_key, verify_db_health, common_query_parameters
+from domain.aggregates.document.document import Document
+from config.config import get_settings, Settings
+from application.use_cases.document_processing.list_documents import ListDocumentsUseCase
+from interface.api.dependencies import validate_api_key, verify_db_health, common_query_parameters, get_list_documents_use_case, get_process_document_use_case, get_get_document_details_use_case, get_delete_document_use_case
+from application.use_cases.document_processing.process_document import ProcessDocumentUseCase, DocumentProcessingError
+from application.use_cases.document_processing.get_document_details import GetDocumentDetailsUseCase
+from application.use_cases.document_processing.delete_document import DeleteDocumentUseCase
 
 logger = logging.getLogger(__name__)
 
@@ -64,57 +67,57 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 
 @router.get(
-    "/", response_model=DocumentListResponse, dependencies=[Depends(verify_db_health)]
+    "/",
+    response_model=DocumentListResponse,
+    dependencies=[Depends(verify_db_health)]
 )
 async def list_documents(
-    document_service: DocumentService = Depends(get_document_service),
-    settings: Settings = Depends(get_settings),
+    list_docs_use_case: ListDocumentsUseCase = Depends(get_list_documents_use_case),
     params: Dict = Depends(common_query_parameters),
     name_filter: Optional[str] = Query(
-        None, description="Filtrar por nome do documento"
+        None, description="Filtrar por nome do documento (case-insensitive)"
     ),
 ):
     """
-    Lista todos os documentos disponíveis.
-
-    Args:
-        params: Parâmetros de consulta (limit, offset, sort_by, order)
-        name_filter: Filtro opcional por nome do documento
-
-    Returns:
-        DocumentListResponse: Lista de documentos
+    Lista documentos disponíveis com filtros, ordenação e paginação.
     """
     try:
-        # Obter documentos (sem conteúdo binário)
-        all_documents = await document_service.list_documents(include_content=False)
+        limit = params["limit"]
+        offset = params["offset"]
+        sort_by = params["sort_by"]
+        order = params["order"]
 
-        # Aplicar filtro por nome, se fornecido
+        # CHAMAR O CASO DE USO E DESEMPACOTAR A TUPLA
+        # documents_page: Lista de documentos da página atual
+        # total_documents: Contagem total de documentos no DB (sem filtros aplicados ainda aqui)
+        documents_page, total_documents = await list_docs_use_case.execute(limit=limit, offset=offset)
+
+        # TODO: Mover filtragem por nome e ordenação para o Caso de Uso/Repositório.
+        # --- Lógica de filtragem/ordenação mantida temporariamente na API ---
+        # NOTA: Se aplicarmos o filtro *depois* da busca paginada, o 'total_documents'
+        # retornado pelo use case (que não sabe do filtro ainda) ficará INCORRETO
+        # em relação à lista filtrada. A solução ideal é passar o filtro para o use case/repo.
+        # Por enquanto, manteremos assim, cientes da imprecisão do 'total' quando há filtro.
         if name_filter:
-            filtered_documents = [
-                doc for doc in all_documents if name_filter.lower() in doc.name.lower()
+            filtered_documents_page = [
+                doc for doc in documents_page if name_filter.lower() in doc.name.lower()
             ]
+            # !! O total_documents ainda reflete o total *antes* do filtro de nome
+            # !! A paginação também foi feita antes do filtro. Isso está subótimo.
         else:
-            filtered_documents = all_documents
+            filtered_documents_page = documents_page
 
-        # Aplicar ordenação
-        sort_field = params.get("sort_by", "upload_date")
-        if sort_field == "name":
-            filtered_documents.sort(key=lambda x: x.name)
-        elif sort_field == "upload_date":
-            filtered_documents.sort(key=lambda x: x.upload_date)
-        elif sort_field == "size_kb":
-            filtered_documents.sort(key=lambda x: x.size_kb)
+        # Aplicar ordenação na página retornada/filtrada (temporário)
+        reverse_sort = order == "desc"
+        if sort_by == "name":
+            filtered_documents_page.sort(key=lambda x: x.name, reverse=reverse_sort)
+        elif sort_by == "upload_date":
+            filtered_documents_page.sort(key=lambda x: x.upload_date, reverse=reverse_sort)
+        elif sort_by == "size_kb":
+            filtered_documents_page.sort(key=lambda x: x.size_kb, reverse=reverse_sort)
+        # --- Fim da lógica temporária ---
 
-        # Inverter se ordem for descendente
-        if params.get("order", "asc").lower() == "desc":
-            filtered_documents.reverse()
-
-        # Aplicar paginação
-        limit = params.get("limit", 10)
-        offset = params.get("offset", 0)
-        paginated_documents = filtered_documents[offset : offset + limit]
-
-        # Converter para formato de resposta
+        # Converter a lista final (página filtrada/ordenada) para o formato de resposta
         document_responses = [
             DocumentResponse(
                 id=doc.id,
@@ -126,20 +129,29 @@ async def list_documents(
                 processed=doc.processed,
                 metadata=doc.metadata,
             )
-            for doc in paginated_documents
+            for doc in filtered_documents_page
         ]
 
+        # USAR O total_documents RETORNADO PELO CASO DE USO
         return DocumentListResponse(
             documents=document_responses,
-            total=len(filtered_documents),
+            total=total_documents, # <-- Usar o total real (antes do filtro de nome aplicado aqui)
             limit=limit,
             offset=offset,
         )
 
+    except RuntimeError as rte:
+         # Capturar erro específico de pool não disponível, por exemplo
+         logger.error(f"Erro de configuração/runtime: {rte}")
+         raise HTTPException(
+             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+             detail="Erro de configuração interna ou serviço indisponível."
+         )
     except Exception as e:
-        logger.error(f"Erro ao listar documentos: {e}")
+        logger.exception(f"Erro inesperado ao listar documentos:")
         raise HTTPException(
-            status_code=500, detail=f"Erro ao listar documentos: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro interno ao processar a solicitação de listagem de documentos."
         )
 
 
@@ -147,63 +159,62 @@ async def list_documents(
     "/upload",
     response_model=DocumentUploadResponse,
     dependencies=[Depends(validate_api_key), Depends(verify_db_health)],
+    status_code=status.HTTP_201_CREATED,
 )
 async def upload_document(
+    process_use_case: ProcessDocumentUseCase = Depends(get_process_document_use_case),
     file: UploadFile = File(...),
-    document_service: DocumentService = Depends(get_document_service),
 ):
     """
-    Faz upload e processa um novo documento.
-
-    Args:
-        file: Arquivo a ser processado
-
-    Returns:
-        DocumentUploadResponse: Informações sobre o documento processado
+    Faz upload e dispara o processamento de um novo documento.
     """
+    MAX_FILE_SIZE = 20 * 1024 * 1024 # Exemplo: 20MB
+    if file.size > MAX_FILE_SIZE:
+         raise HTTPException(
+             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+             detail=f"Arquivo muito grande. O tamanho máximo é {MAX_FILE_SIZE // (1024*1024)}MB",
+         )
+
     try:
-        # Validar tipo de arquivo
-        if not file.filename.lower().endswith(".pdf"):
-            raise HTTPException(
-                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail="Apenas arquivos PDF são suportados atualmente",
-            )
+        file_extension = file.filename.split('.')[-1].lower() if '.' in file.filename else ''
+        if file_extension != "pdf":
+            logger.warning(f"Recebido upload de arquivo não-PDF: {file.filename}")
 
-        # Ler conteúdo do arquivo
         file_content = await file.read()
+        if not file_content:
+             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Arquivo enviado está vazio.")
 
-        if len(file_content) > 10 * 1024 * 1024:  # 10MB
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail="Arquivo muito grande. O tamanho máximo é 10MB",
-            )
+        initial_metadata = {"source": "api_upload", "original_filename": file.filename}
 
-        # Processar documento
-        document = await document_service.process_document(
+        processed_document = await process_use_case.execute(
             file_name=file.filename,
             file_content=file_content,
-            file_type="pdf",
-            metadata={"origem": "upload_api"},
+            file_type=file_extension,
+            metadata=initial_metadata,
         )
 
-        # Criar resposta
+        original_size_kb = file.size / 1024 if file.size else 0
+
         return DocumentUploadResponse(
-            id=document.id,
-            name=document.name,
-            file_type=document.file_type,
-            size_kb=document.size_kb,
-            chunks_count=document.chunks_count,
-            processed=document.processed,
-            message="Documento processado com sucesso",
+            id=processed_document.id,
+            name=processed_document.name,
+            file_type=processed_document.file_type,
+            size_kb=round(original_size_kb, 2),
+            chunks_count=processed_document.chunks_count,
+            processed=processed_document.processed,
+            message=f"Documento '{processed_document.name}' recebido e processamento iniciado/concluído.",
         )
 
+    except DocumentProcessingError as e:
+        logger.error(f"Erro ao processar documento '{file.filename}': {e}")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except HTTPException:
-        # Repassar HTTPExceptions específicas
         raise
     except Exception as e:
-        logger.error(f"Erro ao processar upload: {e}")
+        logger.exception(f"Erro inesperado durante o upload do arquivo '{file.filename}':")
         raise HTTPException(
-            status_code=500, detail=f"Erro ao processar documento: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro interno inesperado ao processar o documento."
         )
 
 
@@ -211,27 +222,20 @@ async def upload_document(
     "/{document_id}",
     response_model=DocumentResponse,
     dependencies=[Depends(verify_db_health)],
+    responses={404: {"description": "Documento não encontrado"}}
 )
 async def get_document(
-    document_id: int = Path(..., description="ID do documento"),
-    document_service: DocumentService = Depends(get_document_service),
+    get_details_use_case: GetDocumentDetailsUseCase = Depends(get_get_document_details_use_case),
+    document_id: int = Path(..., description="ID do documento a ser buscado", ge=1),
 ):
-    """
-    Obtém informações sobre um documento específico.
-
-    Args:
-        document_id: ID do documento
-
-    Returns:
-        DocumentResponse: Informações do documento
-    """
+    """ Obtém informações detalhadas sobre um documento específico. """
     try:
-        document = await document_service.get_document(document_id)
+        document = await get_details_use_case.execute(document_id)
 
-        if not document:
+        if document is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Documento com ID {document_id} não encontrado",
+                detail=f"Documento com ID {document_id} não encontrado.",
             )
 
         return DocumentResponse(
@@ -248,55 +252,43 @@ async def get_document(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Erro ao obter documento {document_id}: {e}")
+        logger.exception(f"Erro inesperado ao buscar documento ID {document_id}:")
         raise HTTPException(
-            status_code=500, detail=f"Erro ao obter documento: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro interno ao buscar detalhes do documento."
         )
 
 
 @router.delete(
     "/{document_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(validate_api_key), Depends(verify_db_health)],
+    responses={
+        500: {"description": "Erro interno ao tentar excluir o documento"}
+    }
 )
 async def delete_document(
-    document_id: int = Path(..., description="ID do documento"),
-    document_service: DocumentService = Depends(get_document_service),
+    delete_use_case: DeleteDocumentUseCase = Depends(get_delete_document_use_case),
+    document_id: int = Path(..., description="ID do documento a ser excluído", ge=1),
 ):
-    """
-    Exclui um documento pelo ID.
-
-    Args:
-        document_id: ID do documento a ser excluído
-
-    Returns:
-        dict: Mensagem de confirmação
-    """
+    """ Exclui um documento e todos os seus chunks associados. """
     try:
-        document = await document_service.get_document(document_id)
-
-        if not document:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Documento com ID {document_id} não encontrado",
-            )
-
-        success = await document_service.delete_document(document_id)
+        success = await delete_use_case.execute(document_id)
 
         if not success:
+            logger.error(f"O caso de uso DeleteDocumentUseCase retornou False para o ID {document_id}, indicando falha na exclusão.")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Falha ao excluir documento",
+                detail="Não foi possível excluir o documento devido a um erro interno."
             )
-
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content={"message": f"Documento {document_id} excluído com sucesso"},
-        )
+        # Se success for True, retorna HTTP 204 No Content automaticamente
+        return
 
     except HTTPException:
-        raise
+         raise
     except Exception as e:
-        logger.error(f"Erro ao excluir documento {document_id}: {e}")
+        logger.exception(f"Erro inesperado ao excluir documento ID {document_id}:")
         raise HTTPException(
-            status_code=500, detail=f"Erro ao excluir documento: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro interno inesperado ao processar a solicitação de exclusão."
         )

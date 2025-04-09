@@ -37,13 +37,24 @@ if PROJECT_ROOT not in sys.path:
 
 # Importar componentes da aplicação APÓS configurar o path
 try:
-    from core.services.rag_service import get_rag_service, RAGService
-    from evaluation.datasets.sample_eval_set import evaluation_dataset
-    # Importar settings para registrar parâmetros
-    from core.config import get_settings
+    # Importar o Serviço de Aplicação e talvez Interfaces/Repositórios se necessário instanciar manualmente
+    from application.services.rag_service import RAGService # Importar o serviço refatorado
+    # Importar dependências necessárias para instanciar RAGService manualmente
+    from application.interfaces.embedding_provider import EmbeddingProvider
+    from application.interfaces.llm_provider import LLMProvider
+    from domain.repositories.chunk_repository import ChunkRepository
+    # Importar implementações e provedores de dependência *se necessário* para instanciação manual
+    # Ex: from interface.api.dependencies import get_embedding_provider, get_llm_provider, get_chunk_repository, SessionDep
+    # Ex: from infrastructure.llm.providers.nvidia_provider import NvidiaProvider
+    # Ex: from infrastructure.persistence.sqlmodel.repositories.sm_chunk_repository import SqlModelChunkRepository
+    # Ex: from infrastructure.external_services.embedding.huggingface_embedding_provider import HuggingFaceEmbeddingProvider
+    # Ex: from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
-    # Certifique-se de que as variáveis de ambiente (DB, LLM keys) estão carregadas
-    # O get_settings() dentro dos serviços deve lidar com isso se .env estiver configurado
+    from evaluation.datasets.sample_eval_set import evaluation_dataset
+    from config.config import get_settings, Settings # Corrigido: de config.config
+    # Remover import do get_rag_service antigo
+    # from core.services.rag_service import get_rag_service # REMOVER
+
 except ImportError as e:
     print(f"Erro ao importar módulos: {e}")
     print(
@@ -57,6 +68,34 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+async def manually_create_rag_service(settings: Settings) -> RAGService:
+    """
+    Função auxiliar para instanciar RAGService e suas dependências fora do FastAPI.
+    !! ISTO É UM EXEMPLO E PRECISA SER COMPLETADO !!
+    """
+    logger.info("Instanciando dependências manualmente para RAGService...")
+
+    # 1. Criar Engine e SessionMaker (exemplo)
+    # engine = create_async_engine(settings.DATABASE_URL, echo=False)
+    # AsyncSessionFactory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+    # 2. Instanciar Provedores e Repositórios (exemplo)
+    # async with AsyncSessionFactory() as session:
+        # embedding_provider = HuggingFaceEmbeddingProvider() # Ou outra implementação
+        # llm_provider = NvidiaProvider() # Ou outra implementação
+        # chunk_repo = SqlModelChunkRepository(session=session)
+
+        # 3. Instanciar RAGService
+        # rag_service = RAGService(
+        #     embedding_provider=embedding_provider,
+        #     llm_provider=llm_provider,
+        #     chunk_repository=chunk_repo
+        # )
+        # return rag_service
+    logger.error("!!! A função manually_create_rag_service precisa ser implementada corretamente !!!")
+    raise NotImplementedError("Instanciação manual do RAGService não implementada.")
 
 
 async def prepare_evaluation_data(rag_service: RAGService) -> Dataset:
@@ -149,7 +188,7 @@ def sanitize_mlflow_metric_name(name: str) -> str:
     return name
 
 
-async def run_evaluation(ragas_dataset: Dataset, settings):
+async def run_evaluation(ragas_dataset: Dataset, settings: Settings):
     """
     Executa a avaliação RAGAS e DeepEval, registrando resultados no MLflow.
     """
@@ -404,12 +443,20 @@ async def main():
     """
     Função principal para orquestrar a preparação dos dados e a avaliação.
     """
-    logger.info("Obtendo instância do RAGService...")
-    settings = None # Inicializa settings
+    logger.info("Obtendo configurações...")
+    settings = None
     try:
         settings = get_settings() # Obter configurações
-        rag_service = get_rag_service()
-        logger.info("RAGService obtido com sucesso.")
+        # ----- Ponto Crítico de Refatoração -----
+        # Substituir a chamada antiga por instanciação manual
+        # rag_service_old = get_rag_service() # REMOVER
+        rag_service = await manually_create_rag_service(settings) # Implementar esta função!
+        # ---------------------------------------
+        logger.info("RAGService instanciado manualmente.")
+    except NotImplementedError as nie:
+         logger.error(f"Erro: {nie}")
+         print(f"ERRO: {nie}")
+         return
     except Exception as e:
         logger.error(f"Falha ao inicializar o RAGService: {e}", exc_info=True)
         print(

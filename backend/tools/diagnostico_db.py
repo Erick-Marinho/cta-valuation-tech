@@ -8,163 +8,72 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Adicionar o diretório raiz ao PYTHONPATH
-current_dir = Path(__file__).parent
-sys.path.append(str(current_dir))
+current_dir = Path(__file__).parent.parent # Ajustar para apontar para 'backend'
+root_dir = current_dir.parent
+sys.path.insert(0, str(root_dir))
+sys.path.insert(0, str(current_dir)) # Adicionar também o dir atual se necessário
 
 # Importar após ajustar o path
-from db.connection import execute_query, get_connection
-from core.services.embedding_service import get_embedding_service
-from db.queries.hybrid_search import realizar_busca_hibrida
-
+# --- Imports Corrigidos/Removidos ---
+# from db.connection import execute_query, get_connection # REMOVER - Usar SQLAlchemy
+# Importar interfaces/implementações necessárias para instanciar manualmente
+from application.interfaces.embedding_provider import EmbeddingProvider
+# Ex: from interface.api.dependencies import get_embedding_provider # Para obter a função
+# Ex: from infrastructure.external_services.embedding.huggingface_embedding_provider import HuggingFaceEmbeddingProvider
+# from db.queries.hybrid_search import realizar_busca_hibrida # REMOVER - Lógica antiga
+from config.config import get_settings # Corrigido: de config.config
+# --- Fim Imports Corrigidos/Removidos ---
 
 async def diagnosticar_sistema_rag():
     """Script para diagnosticar problemas no sistema RAG."""
-    print("====== DIAGNÓSTICO DO SISTEMA RAG ======")
+    print("====== DIAGNÓSTICO DO SISTEMA RAG (REQUER REFAATORAÇÃO) ======")
+    print("!!! ATENÇÃO: Este script está desatualizado e precisa ser refatorado para usar SQLAlchemy/SQLModel e a nova arquitetura de serviços/repositórios. !!!")
 
-    # 1. Verificar conexão com o banco de dados
-    print("\n[1] Verificando conexão com o banco de dados...")
+    settings = get_settings()
+
+    # 1. Verificar conexão com o banco de dados (USANDO SQLALCHEMY)
+    print("\n[1] Verificando conexão com o banco de dados via SQLAlchemy...")
     try:
-        # Tente executar uma consulta simples
-        result = execute_query("SELECT 1 as teste")
-        if result and len(result) > 0:
-            print("✅ Conexão com o banco de dados funcionando corretamente.")
-        else:
-            print("❌ Problema na execução de consultas no banco de dados.")
-            return
+        from sqlalchemy.ext.asyncio import create_async_engine
+        from sqlalchemy import text
+        engine = create_async_engine(settings.DATABASE_URL, echo=False)
+        async with engine.connect() as connection:
+             result = await connection.execute(text("SELECT 1"))
+             if result.scalar_one() == 1:
+                 print("✅ Conexão com o banco de dados (SQLAlchemy) funcionando.")
+             else:
+                 print("❌ Problema na execução de consulta simples via SQLAlchemy.")
+                 return
+        await engine.dispose() # Fechar engine
     except Exception as e:
-        print(f"❌ Erro ao conectar ao banco de dados: {str(e)}")
-        print(
-            "   Verifique as configurações em DATABASE_URL no arquivo .env ou em config.py"
-        )
+        print(f"❌ Erro ao conectar/consultar via SQLAlchemy: {str(e)}")
+        print(f"   Verifique DATABASE_URL: {settings.DATABASE_URL}")
         return
 
-    # 2. Verificar quantidade de documentos e chunks
-    print("\n[2] Verificando documentos e chunks armazenados...")
+    # 2. Verificar quantidade de documentos e chunks (USANDO SQLALCHEMY)
+    print("\n[2] Verificando documentos e chunks (SQLAlchemy)...")
     try:
-        doc_count = execute_query("SELECT COUNT(*) as count FROM documentos_originais")
-        chunk_count = execute_query("SELECT COUNT(*) as count FROM chunks_vetorizados")
-
-        print(f"📚 Total de documentos: {doc_count[0]['count'] if doc_count else 0}")
-        print(f"📝 Total de chunks: {chunk_count[0]['count'] if chunk_count else 0}")
-
-        if not doc_count or doc_count[0]["count"] == 0:
-            print("❌ Nenhum documento encontrado no banco de dados.")
-            print("   Faça upload de documentos antes de realizar consultas.")
-            return
-
-        if not chunk_count or chunk_count[0]["count"] == 0:
-            print("❌ Nenhum chunk encontrado no banco de dados.")
-            print("   Verifique o processamento de documentos.")
-            return
+        engine = create_async_engine(settings.DATABASE_URL, echo=False)
+        async with engine.connect() as connection:
+             doc_count_res = await connection.execute(text("SELECT COUNT(*) FROM documentos_originais"))
+             doc_count = doc_count_res.scalar_one()
+             chunk_count_res = await connection.execute(text("SELECT COUNT(*) FROM chunks_vetorizados"))
+             chunk_count = chunk_count_res.scalar_one()
+             print(f"📚 Total de documentos: {doc_count}")
+             print(f"📝 Total de chunks: {chunk_count}")
+             if doc_count == 0 or chunk_count == 0:
+                  print("⚠️ Banco de dados contém poucos ou nenhum documento/chunk.")
+        await engine.dispose()
     except Exception as e:
-        print(f"❌ Erro ao verificar documentos e chunks: {str(e)}")
-        return
+        print(f"❌ Erro ao verificar contagens via SQLAlchemy: {str(e)}")
+        # return # Pode continuar mesmo com erro aqui
 
-    # 3. Verificar chunks com menção a CTA
-    print("\n[2.1] Verificando chunks com menção a CTA...")
-    try:
-        cta_chunks = execute_query(
-            "SELECT COUNT(*) as count FROM chunks_vetorizados WHERE texto ILIKE '%CTA%'"
-        )
-        cta_full_chunks = execute_query(
-            "SELECT COUNT(*) as count FROM chunks_vetorizados WHERE texto ILIKE '%Conhecimentos Tradicionais Associados%'"
-        )
+    # --- Seções 3, 4, 5 (Busca Híbrida, Análise de Código) estão OBSOLETAS ---
+    print("\n[3] Teste de busca (OBSOLETO - requer ChunkRepository.find_similar)")
+    print("[4] Análise de implementação (OBSOLETO)")
 
-        print(
-            f"🔍 Chunks com menção a 'CTA': {cta_chunks[0]['count'] if cta_chunks else 0}"
-        )
-        print(
-            f"🔍 Chunks com menção a 'Conhecimentos Tradicionais Associados': {cta_full_chunks[0]['count'] if cta_full_chunks else 0}"
-        )
-    except Exception as e:
-        print(f"❌ Erro ao verificar chunks com CTA: {str(e)}")
-
-    # 4. Testar busca com threshold baixo
-    print("\n[3] Testando busca com threshold reduzido...")
-    try:
-        query_test = "CTA"
-        embedding_service = get_embedding_service()
-        embedding = embedding_service.embed_text(query_test)
-
-        chunks = realizar_busca_hibrida(
-            query_text=query_test,
-            query_embedding=embedding,
-            limite=10,
-            alpha=0.5,
-            threshold=0.0,  # Threshold zero para garantir resultados
-        )
-
-        if chunks:
-            print(f"✅ Busca retornou {len(chunks)} resultados com threshold zero.")
-            print("\nPrimeiros 3 resultados:")
-            for i, chunk in enumerate(chunks[:3]):
-                print(
-                    f"  - Score: {chunk.combined_score:.4f}, Origem: {chunk.arquivo_origem}"
-                )
-                print(f"    Texto: {chunk.texto[:80]}...")
-        else:
-            print("❌ Busca não retornou resultados mesmo com threshold zero.")
-            print(
-                "   Isso pode indicar problemas sérios com os embeddings ou com a implementação da busca híbrida."
-            )
-
-        # Testar busca expandida
-        print(
-            "\n[3.1] Testando busca expandida (Conhecimentos Tradicionais Associados)..."
-        )
-        expanded_query = "Conhecimentos Tradicionais Associados"
-        expanded_embedding = embedding_service.embed_text(expanded_query)
-
-        expanded_chunks = realizar_busca_hibrida(
-            query_text=expanded_query,
-            query_embedding=expanded_embedding,
-            limite=10,
-            alpha=0.5,
-            threshold=0.0,
-        )
-
-        if expanded_chunks:
-            print(f"✅ Busca expandida retornou {len(expanded_chunks)} resultados.")
-        else:
-            print("❌ Busca expandida também não retornou resultados.")
-
-    except Exception as e:
-        print(f"❌ Erro ao testar busca: {str(e)}")
-
-    # 5. Verificar a estrutura da função realizar_busca_hibrida
-    print("\n[4] Analisando implementação da busca híbrida...")
-    try:
-        # Examinar o código de realizar_busca_hibrida
-        import inspect
-
-        hybrid_search_code = inspect.getsource(realizar_busca_hibrida)
-
-        # Verificar se há problemas óbvios no código
-        problemas = []
-
-        if (
-            "filtered_chunks = [chunk for chunk in combined_results.values() if chunk.combined_score >= threshold]"
-            in hybrid_search_code
-        ):
-            problemas.append(
-                "⚠️ Filtro de threshold pode estar rejeitando todos os resultados."
-            )
-            print(
-                "   Recomendação: Reduza o valor de threshold ou remova temporariamente essa linha."
-            )
-
-        if not problemas:
-            print(
-                "✅ Nenhum problema óbvio identificado na implementação da busca híbrida."
-            )
-        else:
-            for problema in problemas:
-                print(problema)
-    except Exception as e:
-        print(f"❌ Erro ao analisar implementação: {str(e)}")
-
+    print("\nDiagnóstico básico concluído. Funcionalidade de busca precisa ser testada via API ou scripts de avaliação refatorados.")
 
 if __name__ == "__main__":
     import asyncio
-
     asyncio.run(diagnosticar_sistema_rag())

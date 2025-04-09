@@ -1,72 +1,60 @@
 """
-Inicialização do módulo de banco de dados.
-Fornece acesso direto aos principais componentes.
+Módulo de Banco de Dados - Contém principalmente modelos legados.
+
+A lógica de conexão, schema e repositórios foi movida para a camada
+de Infraestrutura e não deve ser acessada através deste módulo.
 """
 
-import logging
+import logging # Logging pode ser mantido se desejado, ou removido
 
-# Configuração de logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+# Configuração de logging (pode ser movida para um local centralizado)
+# logging.basicConfig(
+#     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+# )
 
-# Importações para facilitar o acesso
-from .connection import (
-    get_connection,
-    get_cursor,
-    close_connection,
-    execute_query,
-    execute_query_single_result,
-    execute_transaction,
-)
-
-from .schema import setup_database, check_database_version, is_database_healthy
-
-# Importação de modelos
-from .models.document import Documento
-from .models.chunk import Chunk
-
-# Importação de repositórios
-from .repositories.document_repository import DocumentoRepository
-from .repositories.chunk_repository import ChunkRepository
-
-# Exportar para facilitar imports
-__all__ = [
-    # Connection
-    "get_connection",
-    "get_cursor",
-    "close_connection",
-    "execute_query",
-    "execute_query_single_result",
-    "execute_transaction",
-    # Schema
-    "setup_database",
-    "check_database_version",
-    "is_database_healthy",
-    # Models
-    "Documento",
-    "Chunk",
-    # Repositories
-    "DocumentoRepository",
-    "ChunkRepository",
-]
+# --- Imports REMOVIDOS ---
+# from .connection import (
+#     get_connection,
+#     get_cursor,
+#     close_connection,
+#     execute_query,
+#     execute_query_single_result,
+#     execute_transaction,
+# )
+# from .schema import setup_database, check_database_version, is_database_healthy
+# from .repositories.document_repository import DocumentoRepository
+# from .repositories.chunk_repository import ChunkRepository
+# --- Fim dos Imports REMOVIDOS ---
 
 
-# Inicialização automática ao importar o módulo
-def initialize_db():
-    """
-    Configura o banco de dados ao inicializar o módulo.
-    """
-    try:
-        setup_database()
-        version = check_database_version()
-        logging.info(f"Banco de dados inicializado - versão {version}")
-    except Exception as e:
-        logging.error(f"Erro ao inicializar banco de dados: {e}")
+# Importação de modelos (Manter se a pasta db/models ainda existe)
+# Se você mover os modelos para ORM na infraestrutura, remova isso também.
+try:
+    from .models.document import Documento
+    from .models.chunk import Chunk
+    MODELS_PRESENT = True
+except ImportError:
+    # Caso a pasta models também seja removida/movida no futuro
+    Documento = None
+    Chunk = None
+    MODELS_PRESENT = False
+    logging.warning("Modelos legados não encontrados em db/models.")
 
 
-# Inicialização automática se solicitada via variável de ambiente
-import os
+# Exportar apenas o que ainda existe e é relevante (provavelmente só os modelos legados)
+__all__ = []
+if MODELS_PRESENT:
+    __all__.extend(["Documento", "Chunk"])
 
-if os.getenv("AUTO_INIT_DB", "false").lower() == "true":
-    initialize_db()
+
+# --- Função de Inicialização REMOVIDA ---
+# def initialize_db():
+#    ... (código removido) ...
+# --- Fim da Função REMOVIDA ---
+
+
+# --- Lógica de Auto-Inicialização REMOVIDA ---
+# import os
+# if os.getenv("AUTO_INIT_DB", "false").lower() == "true":
+#     initialize_db()
+# --- Fim da Auto-Inicialização REMOVIDA ---

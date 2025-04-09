@@ -2,11 +2,13 @@
 Endpoints para conversação e consultas usando RAG.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List, Optional, Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from typing import List, Optional, Dict, Any, Annotated
 from pydantic import BaseModel
-from core.services.rag_service import get_rag_service, RAGService
-from core.config import get_settings, Settings
+from application.services.rag_service import RAGService
+from interface.api.dependencies import get_rag_service
+from config.config import get_settings, Settings
+from shared.exceptions import CoreException
 from utils.metrics_prometheus import record_user_feedback
 
 
@@ -35,7 +37,7 @@ class SuggestedQuestion(BaseModel):
 class FeedbackRequest(BaseModel):
     """Modelo para submissão de feedback."""
 
-    query_id: str
+    query_id: Optional[str] = None
     is_helpful: bool
     comments: Optional[str] = None
 
@@ -44,21 +46,18 @@ class FeedbackRequest(BaseModel):
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
-# Dependência para obter o serviço RAG
-def get_rag_svc() -> RAGService:
-    return get_rag_service()
-
-
 # Dependência para obter configurações
-def get_app_settings() -> Settings:
-    return get_settings()
+SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+# Dependência para obter o serviço RAG
+RAGServiceDep = Annotated[RAGService, Depends(get_rag_service)]
 
 
 @router.post("/", response_model=ChatResponse)
 async def process_chat_query(
     query: ChatQuery,
-    rag_service: RAGService = Depends(get_rag_svc),
-    settings: Settings = Depends(get_app_settings),
+    rag_service: RAGServiceDep,
+    settings: SettingsDep,
 ):
     """
     Processa uma consulta do usuário usando o sistema RAG.
@@ -81,22 +80,21 @@ async def process_chat_query(
         )
 
         return ChatResponse(
-            response=result.get("response", ""),
+            response=result.get("response", "Nenhuma resposta gerada."),
             processing_time=result.get("processing_time"),
-            debug_info=result.get("debug_info") if include_debug else None,
+            debug_info=result.get("debug_info"),
         )
 
+    except CoreException as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Erro ao processar consulta: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro interno ao processar consulta.")
 
 
 @router.get("/suggested-questions", response_model=List[SuggestedQuestion])
 async def get_suggested_questions(
     query: Optional[str] = Query(None, description="Consulta para basear as sugestões"),
     limit: int = Query(5, description="Número máximo de sugestões"),
-    rag_service: RAGService = Depends(get_rag_svc),
 ):
     """
     Retorna perguntas sugeridas, opcionalmente baseadas em uma consulta do usuário.
@@ -111,7 +109,13 @@ async def get_suggested_questions(
     try:
         if query:
             # Sugestões baseadas na consulta do usuário
-            questions = rag_service.get_similar_questions(query, limit=limit)
+            questions = [
+                "O que é CTA Value Tech?",
+                "Como funciona a valoração de tecnologias?",
+                "Quais são os indicadores de sustentabilidade utilizados?",
+                "Como são calculados os royalties?",
+                "Quais princípios da Convenção sobre a Diversidade Biológica são considerados?",
+            ][:limit]
         else:
             # Sugestões padrão se não houver consulta
             questions = [
@@ -131,7 +135,7 @@ async def get_suggested_questions(
         )
 
 
-@router.post("/feedback", status_code=200)
+@router.post("/feedback", status_code=status.HTTP_200_OK)
 async def submit_feedback(feedback: FeedbackRequest):
     """
     Submete feedback do usuário sobre uma resposta.
