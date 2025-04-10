@@ -6,91 +6,83 @@ Este módulo configura o rastreamento distribuído usando OpenTelemetry,
 permitindo acompanhar o fluxo de requisições através dos componentes do sistema.
 """
 import logging
-from opentelemetry import trace
+import os
+from typing import Optional
+
+# OpenTelemetry Imports
+from opentelemetry import trace, metrics
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.sampling import ParentBased, ALWAYS_ON
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-import os
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter as GRPCSpanExporter
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+from opentelemetry.sdk.resources import SERVICE_NAME as ResourceAttributesServiceName, Resource
 
 logger = logging.getLogger(__name__)
 
-# Flag para garantir que a configuração seja feita apenas uma vez
-_telemetry_initialized = False
+_tracer_provider: Optional[TracerProvider] = None
 
-
-def setup_telemetry(service_name="cta-value-tech"):
+def initialize_telemetry(service_name: str, otlp_endpoint: Optional[str] = None):
     """
-    Configura o OpenTelemetry para o serviço.
-
-    Esta função inicializa o OpenTelemetry para rastreamento distribuído,
-    configurando um exportador para enviar os dados para o Jaeger.
+    Configura e inicializa o OpenTelemetry para Tracing (e opcionalmente Metrics).
 
     Args:
-        service_name: Nome do serviço para identificação nos traces
-
-    Returns:
-        tracer: Um tracer configurado para criar spans
+        service_name: Nome do serviço a ser reportado (ex: 'rag-api', 'rag-script').
+        otlp_endpoint: Endpoint do coletor OTLP (ex: 'http://tempo:4317').
+                       Se None, tentará obter da variável de ambiente OTEL_EXPORTER_OTLP_ENDPOINT
+                       ou usará ConsoleSpanExporter como fallback.
     """
-    from config.config import get_settings
-
-    global _telemetry_initialized
-    if _telemetry_initialized:
-        logger.warning("Tentativa de configurar OpenTelemetry mais de uma vez.")
+    global _tracer_provider
+    if _tracer_provider:
+        logger.warning("Tentativa de inicializar telemetria múltiplas vezes.")
         return
 
     try:
-        settings = get_settings()
-        # 1. Obter configurações
-        service_name = settings.OTEL_SERVICE_NAME
-        otlp_endpoint = settings.OTEL_EXPORTER_OTLP_ENDPOINT
+        resource = Resource(attributes={
+            ResourceAttributesServiceName: service_name
+        })
 
-        # 2. Criar recurso identificando o serviço
-        resource = Resource(attributes={SERVICE_NAME: service_name})
+        # --- Configuração do Tracer ---
+        _tracer_provider = TracerProvider(resource=resource)
+        trace.set_tracer_provider(_tracer_provider)
 
-        # 3. Configurar Sampler
-        sampler = ParentBased(ALWAYS_ON)
+        actual_otlp_endpoint = otlp_endpoint or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 
-        # 4. Configurar Provedor de Tracer (passando o sampler)
-        provider = TracerProvider(resource=resource, sampler=sampler)
+        if actual_otlp_endpoint:
+            logger.info(f"Configurando OTLP gRPC Span Exporter para: {actual_otlp_endpoint}")
+            # Usar insecure=True se o endpoint não for HTTPS ou não tiver certificado válido
+            # A opção padrão é verificar certificados
+            exporter = GRPCSpanExporter(
+                endpoint=actual_otlp_endpoint,
+                # insecure=True # Descomente se necessário (ex: localhost sem TLS)
+            )
+            span_processor = BatchSpanProcessor(exporter)
+        else:
+            logger.warning("Endpoint OTLP não configurado. Usando ConsoleSpanExporter.")
+            exporter = ConsoleSpanExporter() # Fallback para console se não houver endpoint
+            span_processor = BatchSpanProcessor(exporter)
 
-        # 5. Configurar Exportador OTLP (gRPC)
-        #    A biblioteca lida com `insecure` baseado no schema da URL (http vs https)
-        #    Se precisar de configuração explícita (ex: certificados), adicione aqui.
-        logger.info(f"Configurando OTLP Exporter para o endpoint gRPC: {otlp_endpoint}")
-        otlp_exporter = OTLPSpanExporter(
-            endpoint=otlp_endpoint
-        )  # Usa o endpoint da config
-
-        # Criar processador para exportar spans em batch
-        span_processor = BatchSpanProcessor(otlp_exporter)
-
-        # Adicionar processador ao provedor
-        provider.add_span_processor(span_processor)
-
-        # Definir provedor global
-        trace.set_tracer_provider(provider)
-
-        _telemetry_initialized = True
-        logger.info(
-            f"OpenTelemetry configurado com sucesso para o serviço '{service_name}'"
-        )
+        _tracer_provider.add_span_processor(span_processor)
+        logger.info(f"OpenTelemetry Tracing inicializado para serviço: '{service_name}'")
 
     except Exception as e:
-        logger.exception(f"Erro ao configurar OpenTelemetry: {str(e)}")
-        # Retornar um tracer noop que não fará nada, evitando erros
-        return trace.get_tracer(__name__)
+        logger.error(f"Falha ao inicializar OpenTelemetry: {e}", exc_info=True)
+        # Resetar providers em caso de falha para evitar estado inconsistente
+        _tracer_provider = None
+        trace.set_tracer_provider(trace.NoOpTracerProvider()) # Define NoOp para evitar erros futuros
 
-
-def get_tracer(name):
+def get_tracer(name: str) -> trace.Tracer:
     """
-    Obtém um tracer para o módulo especificado.
+    Obtém uma instância do Tracer configurado.
 
     Args:
-        name: Nome do módulo ou componente
+        name: Nome do módulo ou componente que está criando o span.
 
     Returns:
-        Um tracer para criar spans
+        Instância do Tracer OpenTelemetry.
     """
+    if not _tracer_provider:
+        # Se não inicializado, retorna um NoOpTracer para evitar erros
+        # Idealmente, initialize_telemetry deve ser chamado no ponto de entrada
+        logger.warning("Telemetria não inicializada, retornando NoOpTracer.")
+        return trace.get_tracer(name, tracer_provider=trace.NoOpTracerProvider())
     return trace.get_tracer(name)

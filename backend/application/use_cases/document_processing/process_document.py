@@ -1,6 +1,8 @@
 import logging
 import time # Para métricas de tempo
 from typing import Dict, Any, Optional, List # Adicionar List
+import re # <-- Adicionar import re
+import hashlib # <-- Importar hashlib
 
 # Importar entidades do domínio
 from domain.aggregates.document.document import Document
@@ -23,6 +25,16 @@ class DocumentProcessingError(Exception):
     pass
 
 logger = logging.getLogger(__name__)
+
+# --- Função Auxiliar de Limpeza (ou colocar em utils) ---
+def clean_page_markers(text: str) -> str:
+    """ Remove marcadores como [Página X] do início do texto. """
+    # Regex para encontrar "[Página X]" (com ou sem espaço) no início da string,
+    # possivelmente seguido por quebras de linha/espaços.
+    pattern = r"^\[Página\s*\d+\]\s*"
+    # pattern = r"\[Página\s*\d+\]" # Se quiser remover de qualquer lugar (menos seguro)
+    return re.sub(pattern, "", text).strip()
+# ------------------------------------------------------
 
 class ProcessDocumentUseCase:
     """
@@ -47,199 +59,215 @@ class ProcessDocumentUseCase:
         self._evaluator = chunk_evaluator
         self._settings = get_settings()
 
-    # Método auxiliar para determinar estratégia (pode ser movido para domínio/serviço se complexo)
-    def _determine_chunk_strategy(self, file_name: str, metadata: Dict[str, Any]) -> str:
-        # Lógica similar à do DocumentService original
-        if file_name.lower().endswith((".md", ".markdown")):
-            return "header_based"
-        if metadata:
-            if metadata.get("has_toc") or metadata.get("document_structure"):
-                return "header_based"
-            if metadata.get("tipo_documento") in ["artigo", "técnico", "manual", "guia"]:
-                return "header_based"
-        return "hybrid" # Ou outra estratégia padrão configurável
-
     async def execute(
         self,
         file_name: str,
         file_content: bytes,
         file_type: str,
         metadata: Optional[Dict[str, Any]] = None,
-        chunk_strategy: str = "auto",
     ) -> Document:
         """ Executa o processamento completo do documento. """
         start_time = time.time()
         logger.info(f"Iniciando processamento para documento: {file_name}")
-        metadata = metadata or {}
-        saved_doc: Optional[Document] = None # Para garantir que temos o ID
+        initial_metadata = metadata or {}
+        saved_doc: Optional[Document] = None
+        document_id: Optional[int] = None
+        original_size_kb = len(file_content) / 1024 if file_content else 0.0
+        content_hash = hashlib.sha256(file_content).hexdigest() if file_content else None
+        enriched_metadata = initial_metadata.copy()
+        enriched_metadata["content_hash_sha256"] = content_hash
 
-        try:
+        # --- CORREÇÃO DA ESTRUTURA try/except ---
+        try: # <-- Bloco TRY principal engloba todo o processamento
+            # --- Extração de Metadados ---
+            try: # <-- Try interno para extração de metadados
+                doc_extracted_metadata = await self._extractor.extract_document_metadata(file_content, file_type)
+                for key, value in doc_extracted_metadata.items():
+                     if key not in enriched_metadata:
+                          enriched_metadata[key] = value
+            except Exception as meta_err:
+                 logger.warning(f"Falha ao extrair metadados do documento {file_name}: {meta_err}")
+                 enriched_metadata["metadata_extraction_status"] = "failed"
+            # ------------------------------------
+
             # 1. Criar entidade Document inicial
             document = Document(
                 name=file_name,
                 file_type=file_type,
-                content=file_content, # Manter conteúdo por enquanto para extração
-                metadata=metadata,
+                metadata=enriched_metadata,
+                size_kb=original_size_kb,
             )
 
-            # 2. Salvar Document inicial via _doc_repo.save() -> obter ID
-            # É importante salvar cedo para ter um ID, mesmo que o resto falhe.
-            try:
+            # 2. Salvar Document inicial
+            try: # <-- Try interno para salvar doc inicial
                  saved_doc = await self._doc_repo.save(document)
-                 document.id = saved_doc.id
-                 logger.info(f"Documento inicial salvo com ID: {document.id}")
-            except Exception as e:
+                 if not saved_doc or not saved_doc.id:
+                      raise DocumentProcessingError(f"Repositório não retornou um ID válido ao salvar doc inicial para {file_name}")
+                 document_id = saved_doc.id
+                 document.id = document_id # Atualizar objeto em memória com ID
+                 logger.info(f"Documento inicial salvo com ID: {document_id}")
+            except Exception as e: # Captura erro do save inicial
                  logger.exception(f"Falha crítica ao salvar registro inicial do documento {file_name}: {e}")
+                 # Relança como DocumentProcessingError para ser pego pelo except principal
                  raise DocumentProcessingError(f"Não foi possível salvar o registro inicial do documento: {e}") from e
 
-            # 3. Extrair texto via _extractor.extract()
-            try:
-                text, extracted_metadata, structure = await self._extractor.extract(document.content, document.file_type)
-                logger.info(f"Texto extraído de {file_name}. Tamanho: {len(text)} caracteres.")
-                # Limpar conteúdo binário da memória após extração
-                document.content = bytes()
-            except Exception as e:
-                logger.exception(f"Falha ao extrair texto do documento {document.id}: {e}")
+            # 3. Extrair texto por página
+            pages_data: List[Dict[str, Any]] = []
+            try: # <-- Try interno para extração de texto
+                pages_data = await self._extractor.extract_text(file_content, file_type)
+                if not pages_data:
+                    logger.warning(f"Nenhum texto/página extraído do documento {file_name} (ID: {document_id}). Marcando como falha.")
+                    raise DocumentProcessingError(f"Falha na extração de texto (sem páginas) para {file_name}")
+                logger.info(f"Texto extraído de {len(pages_data)} páginas para doc ID {document_id}.")
+            except NotImplementedError as nie: # Captura erro específico do extrator
+                 logger.error(f"Tipo de arquivo '{file_type}' não suportado pelo extrator para {file_name} (ID: {document_id}).")
+                 raise DocumentProcessingError(f"Tipo de arquivo não suportado: {file_type}") from nie
+            except Exception as e: # Captura outros erros de extração
+                logger.exception(f"Falha ao extrair texto do documento {document_id}: {e}")
                 raise DocumentProcessingError(f"Erro na extração de texto: {e}") from e
 
-            # 4. Atualizar metadados do Document em memória com dados extraídos
-            document.metadata.update({
-                "extracted_metadata": extracted_metadata or {},
-                "document_structure": structure or {},
-            })
+            # ----- INÍCIO DO LOOP DE PROCESSAMENTO DE PÁGINAS E CHUNKS -----
+            all_domain_chunks: List[Chunk] = []
+            total_chunks_created = 0
+            for page_data in pages_data:
+                page_num = page_data.get("page_number")
+                page_text_raw = page_data.get("text", "")
+                if not page_num:
+                    logger.warning(f"Dados inválidos para página (Num: {page_num}) em doc ID {document_id}. Pulando.")
+                    continue
+                page_text_cleaned = clean_page_markers(page_text_raw)
+                if not page_text_cleaned and page_text_raw:
+                    logger.warning(f"Texto da página {page_num} (Doc ID: {document_id}) ficou vazio após limpeza.")
+                logger.debug(f"[DEBUG] Processando Página: {page_num} (Doc ID: {document_id})")
 
-            # 5. (Opcional) Atualizar metadados no DB
-            try:
-                # Passar o objeto 'document' inteiro para save pode atualizar tudo
-                await self._doc_repo.save(document)
-                logger.debug(f"Metadados atualizados no DB para documento {document.id}")
-            except Exception as e:
-                # Logar, mas talvez não seja crítico parar aqui? Depende do requisito.
-                logger.warning(f"Falha ao atualizar metadados no DB para doc {document.id} após extração: {e}")
-
-
-            if not text or not text.strip():
-                 logger.warning(f"Nenhum texto útil extraído do documento {document.id}. Processamento de chunks cancelado.")
-                 document.processed = False # Marcar como não processado
-                 document.chunks_count = 0
-                 # Salvar o estado final (sem chunks)
-                 await self._doc_repo.save(document)
-                 return document
-
-            # 6. Determinar estratégia de chunking
-            effective_strategy = chunk_strategy
-            if chunk_strategy == "auto":
-                effective_strategy = self._determine_chunk_strategy(file_name, document.metadata)
-            logger.info(f"Estratégia de chunking para {document.id}: {effective_strategy}")
-
-            # 7. Dividir texto em chunks via _chunker.chunk()
-            chunk_size = self._settings.CHUNK_SIZE
-            chunk_overlap = self._settings.CHUNK_OVERLAP
-            try:
-                chunk_texts = await self._chunker.chunk(text, effective_strategy, chunk_size, chunk_overlap)
-                logger.info(f"{len(chunk_texts)} chunks de texto gerados para documento {document.id}")
-            except Exception as e:
-                logger.exception(f"Falha no chunking do documento {document.id}: {e}")
-                raise DocumentProcessingError(f"Erro no chunking: {e}") from e
-
-            if not chunk_texts:
-                logger.warning(f"Chunking não resultou em chunks para o documento {document.id}.")
-                document.processed = False
-                document.chunks_count = 0
-                await self._doc_repo.save(document)
-                return document
-
-            # 8. Avaliar chunks via _evaluator.evaluate() (se disponível)
-            quality_metrics = {}
-            if self._evaluator:
+                page_chunks_data: List[Dict[str, Any]] = []
                 try:
-                    quality_metrics = await self._evaluator.evaluate(chunk_texts, text)
-                    logger.info(f"Qualidade dos chunks avaliada para doc {document.id}: {quality_metrics}")
-                except Exception as e:
-                    logger.warning(f"Falha ao avaliar qualidade dos chunks para doc {document.id}: {e}")
-                    # Continuar mesmo se a avaliação falhar?
+                    chunk_base_metadata = {}
+                    page_chunks_data = await self._chunker.split_page_to_chunks(
+                        page_number=page_num,
+                        page_text=page_text_cleaned,
+                        base_metadata=chunk_base_metadata
+                    )
+                except Exception as chunk_err:
+                    logger.error(f"Erro durante o chunking da página {page_num} (Doc ID: {document_id}): {chunk_err}", exc_info=True)
+                    continue # Pula para a próxima página
 
-            # 9. Gerar embeddings via _embedder.embed_batch()
-            try:
-                embeddings = await self._embedder.embed_batch(chunk_texts)
-                logger.info(f"{len(embeddings)} embeddings gerados para documento {document.id}")
-                if len(embeddings) != len(chunk_texts):
-                     raise DocumentProcessingError(f"Número de embeddings ({len(embeddings)}) não corresponde ao número de chunks ({len(chunk_texts)}).")
-            except Exception as e:
-                logger.exception(f"Falha ao gerar embeddings para documento {document.id}: {e}")
-                raise DocumentProcessingError(f"Erro na geração de embeddings: {e}") from e
+                logger.debug(f"[DEBUG] Chunker retornou {len(page_chunks_data)} chunks para a página {page_num} (Doc ID: {document_id}).")
 
-            # 10. Criar entidades Chunk
-            chunks_to_save: List[Chunk] = []
-            for i, (chunk_text, embedding) in enumerate(zip(chunk_texts, embeddings)):
-                chunk_metadata = {
-                    "chunk_index": i,
-                    "total_chunks_generated": len(chunk_texts),
-                    "chunking_strategy": effective_strategy,
-                    # Adicionar métricas de qualidade se disponíveis
-                    **{f"quality_{k}": v for k, v in quality_metrics.items()}
-                }
-                chunk_entity = Chunk(
-                    document_id=document.id,
-                    text=chunk_text,
-                    embedding=embedding,
-                    position=i,
-                    metadata=chunk_metadata
-                    # page_number - precisaria vir da extração/chunking
-                )
-                chunks_to_save.append(chunk_entity)
+                page_chunk_embeddings: List[List[float]] = []
+                chunk_texts_for_embedding: List[str] = [d.get("text", "") for d in page_chunks_data if d.get("text")]
 
-            # 11. Salvar chunks em lote via _chunk_repo.save_batch()
-            try:
-                # Assumindo que save_batch retorna os chunks salvos (com IDs)
-                saved_chunks = await self._chunk_repo.save_batch(chunks_to_save)
-                num_chunks_saved = len(saved_chunks) # Ou a implementação pode retornar a contagem
-                logger.info(f"{num_chunks_saved} chunks salvos no DB para documento {document.id}")
-            except Exception as e:
-                logger.exception(f"Falha ao salvar chunks em lote para documento {document.id}: {e}")
-                raise DocumentProcessingError(f"Erro ao salvar chunks: {e}") from e
+                if chunk_texts_for_embedding:
+                    try: # Try para embedding da página
+                        page_chunk_embeddings = await self._embedder.embed_batch(chunk_texts_for_embedding)
+                        if len(page_chunk_embeddings) != len(chunk_texts_for_embedding):
+                            raise DocumentProcessingError(f"Embeddings x Textos não batem para página {page_num}.")
+                    except Exception as embed_err:
+                        logger.error(f"Erro ao gerar embeddings para chunks da página {page_num} (Doc ID: {document_id}): {embed_err}", exc_info=True)
+                        continue # Pula para a próxima página
 
-            # 12. Atualizar entidade Document final
+                embedding_idx = 0
+                for i, chunk_data in enumerate(page_chunks_data):
+                    chunk_text = chunk_data.get("text", "")
+                    chunk_metadata = chunk_data.get("metadata", {})
+                    if "page_number" not in chunk_metadata:
+                        chunk_metadata["page_number"] = page_num
+                    chunk_page_num = chunk_metadata.get("page_number")
+                    if not chunk_text: continue # Pula chunk vazio
+                    current_embedding = []
+                    if embedding_idx < len(page_chunk_embeddings):
+                        current_embedding = page_chunk_embeddings[embedding_idx]; embedding_idx += 1
+                    else:
+                        logger.error(f"Faltando embedding para chunk {i}, pág {chunk_page_num}, doc {document_id}. Pulando chunk.")
+                        continue
+                    domain_chunk = Chunk(
+                        document_id=document_id, text=chunk_text, embedding=current_embedding,
+                        page_number=chunk_page_num, position=total_chunks_created, metadata=chunk_metadata
+                    )
+                    all_domain_chunks.append(domain_chunk)
+                    total_chunks_created += 1
+            # ----- FIM DO LOOP -----
+
+            logger.info(f"Total de {total_chunks_created} domain chunks criados para doc ID {document_id}.")
+
+            # 6. Salvar chunks em lote (DENTRO do try principal)
+            num_chunks_saved = 0
+            if all_domain_chunks:
+                try: # Try interno para salvar chunks
+                    saved_chunk_results = await self._chunk_repo.save_batch(all_domain_chunks)
+                    num_chunks_saved = len(saved_chunk_results) if isinstance(saved_chunk_results, list) else (saved_chunk_results if isinstance(saved_chunk_results, int) else len(all_domain_chunks))
+                    logger.info(f"{num_chunks_saved} chunks salvos no DB para documento {document_id}")
+                except Exception as e: # Captura erro do save_batch
+                    logger.exception(f"Falha ao salvar chunks em lote para documento {document_id}: {e}")
+                    raise DocumentProcessingError(f"Erro ao salvar chunks: {e}") from e # Relança para except principal
+            else:
+                logger.warning(f"Nenhum chunk foi gerado para salvar para doc ID {document_id}.")
+
+            # 7. Atualizar entidade Document final (DENTRO do try principal)
             document.chunks_count = num_chunks_saved
             document.processed = num_chunks_saved > 0
+            document.metadata["page_count"] = len(pages_data)
+            document.size_kb = original_size_kb
+            document.metadata["processing_status"] = "success"
+            document.metadata.pop("processing_error", None)
+            document.metadata.pop("metadata_extraction_status", None)
 
-            # 13. Salvar estado final do Document no DB (com contagem de chunks)
-            try:
+            # 8. Salvar estado final do Document no DB (DENTRO do try principal)
+            document_to_return: Document
+            try: # Try interno para salvar estado final
                 final_saved_doc = await self._doc_repo.save(document)
-                logger.info(f"Estado final do documento {document.id} salvo (Processed: {final_saved_doc.processed}, Chunks: {final_saved_doc.chunks_count}).")
-            except Exception as e:
+                logger.info(f"Estado final do documento {document.id} salvo (Processed: {final_saved_doc.processed}, Chunks: {final_saved_doc.chunks_count}, SizeKB: {final_saved_doc.size_kb:.2f}).")
+                document_to_return = final_saved_doc
+            except Exception as e: # Captura erro do save final
                 logger.warning(f"Falha ao salvar estado final do documento {document.id}: {e}")
-                # Retornar o estado em memória mesmo assim? Ou relançar?
-                # Por segurança, vamos retornar o estado que deveria ter sido salvo.
+                document_to_return = document # Retorna o estado em memória como fallback
 
-            # 14. Retornar entidade Document final
+            # 9. Retornar entidade Document final (DENTRO do try principal)
             end_time = time.time()
             logger.info(f"Documento {document.id} ({file_name}) processado com sucesso em {end_time - start_time:.2f}s.")
-            return document # Retorna o estado final atualizado em memória
+            return document_to_return
 
-        except DocumentProcessingError as e:
-             # Erro esperado durante o processamento
-             logger.error(f"Erro de processamento para {file_name}: {e}")
-             # Marcar documento como não processado ou com erro se já foi salvo
-             if saved_doc and saved_doc.id:
+        # --- Bloco EXCEPT principal (NÍVEL 1) ---
+        except DocumentProcessingError as e: # Captura erros de processamento esperados
+             logger.error(f"Erro de processamento para {file_name} (Doc ID: {document_id}): {e}")
+             doc_id_to_update = document_id or (saved_doc.id if saved_doc else None)
+             if doc_id_to_update:
                   try:
-                       saved_doc.processed = False # Ou adicionar um status 'error'?
-                       # Poderia adicionar detalhes do erro aos metadados
-                       saved_doc.metadata["processing_error"] = str(e)
-                       await self._doc_repo.save(saved_doc)
+                       # Tentar marcar o doc como falho no DB
+                       doc_to_update = await self._doc_repo.find_by_id(doc_id_to_update)
+                       if doc_to_update:
+                            doc_to_update.processed = False
+                            doc_to_update.metadata.update({
+                                "processing_status": "failed",
+                                "processing_error": str(e)
+                            })
+                            await self._doc_repo.save(doc_to_update)
+                            logger.info(f"Status de erro atualizado para doc ID {doc_id_to_update}")
+                       else:
+                            logger.warning(f"Não foi possível encontrar doc {doc_id_to_update} para atualizar status de erro.")
                   except Exception as db_err:
-                       logger.error(f"Falha ao atualizar status de erro no DB para doc {saved_doc.id}: {db_err}")
-             raise # Relança a exceção para a camada de interface tratar (ex: retornar erro HTTP)
-        except Exception as e:
-             # Erro inesperado
-             logger.exception(f"Erro inesperado ao processar documento {file_name}: {e}")
-             # Tentar atualizar status se possível
-             if saved_doc and saved_doc.id:
+                       logger.error(f"Falha ao atualizar status de erro no DB para doc {doc_id_to_update}: {db_err}")
+             raise # Relança a DocumentProcessingError original
+
+        except Exception as e: # Captura qualquer outro erro inesperado
+             logger.exception(f"Erro inesperado ao processar documento {file_name} (Doc ID: {document_id}): {e}")
+             doc_id_to_update = document_id or (saved_doc.id if saved_doc else None)
+             if doc_id_to_update:
                   try:
-                       saved_doc.processed = False
-                       saved_doc.metadata["processing_error"] = f"Unexpected error: {type(e).__name__}"
-                       await self._doc_repo.save(saved_doc)
+                       # Tentar marcar o doc como falho no DB
+                       doc_to_update = await self._doc_repo.find_by_id(doc_id_to_update)
+                       if doc_to_update:
+                            doc_to_update.processed = False
+                            doc_to_update.metadata.update({
+                                "processing_status": "failed",
+                                "processing_error": f"Unexpected error: {type(e).__name__}"
+                            })
+                            await self._doc_repo.save(doc_to_update)
+                            logger.info(f"Status de erro inesperado atualizado para doc ID {doc_id_to_update}")
+                       else:
+                           logger.warning(f"Não foi possível encontrar doc {doc_id_to_update} para atualizar status de erro inesperado.")
                   except Exception as db_err:
-                       logger.error(f"Falha ao atualizar status de erro inesperado no DB para doc {saved_doc.id}: {db_err}")
-             # Relança como erro de processamento genérico
+                       logger.error(f"Falha ao atualizar status de erro inesperado no DB para doc {doc_id_to_update}: {db_err}")
+             # Encapsula o erro inesperado em DocumentProcessingError antes de relançar
              raise DocumentProcessingError(f"Erro inesperado no processamento: {e}") from e
+        # --- FIM DA CORREÇÃO ---

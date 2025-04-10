@@ -1,0 +1,15 @@
+artifact_uri: file:///C:/Projetos/cta-valuation-tech/backend/mlruns/0/e392917b6d334892a29de6187f350965/artifacts
+end_time: 1744218379702
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: e392917b6d334892a29de6187f350965
+run_name: kindly-mule-369
+run_uuid: e392917b6d334892a29de6187f350965
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1744218379051
+status: 3
+tags: []
+user_id: erick

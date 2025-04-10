@@ -48,21 +48,20 @@ class SqlModelDocumentRepository(DocumentRepository):
             else:
                  logger.warning(f"Metadados do DB não são string nem dict para doc ID {db_doc.id} (tipo: {type(metadata_from_db)}). Usando dict vazio.")
 
-            # Criar entidade do domínio APENAS com os campos esperados pelo __init__
+            # Criar entidade do domínio lendo os novos campos do DB
             domain_document = Document(
                 id=db_doc.id,
                 name=db_doc.nome_arquivo,
                 file_type=db_doc.tipo_arquivo,
-                content=bytes(), # Content não é armazenado/retornado aqui
                 upload_date=db_doc.data_upload,
-                metadata=metadata_dict
-                # Remover size_kb, chunks_count, processed daqui
+                metadata=metadata_dict,
+                # Ler os novos campos do objeto db_doc
+                size_kb=db_doc.size_kb if db_doc.size_kb is not None else 0.0,
+                chunks_count=db_doc.chunks_count if db_doc.chunks_count is not None else 0,
+                processed=db_doc.processed if db_doc.processed is not None else False,
+                # O conteúdo binário não é lido aqui por padrão
             )
             logger.debug(f"Mapeamento para Document (domínio) bem-sucedido para ID: {domain_document.id}")
-            # Se precisarmos dos outros campos na entidade (fora do init), podemos setá-los aqui:
-            # domain_document.size_kb = 0.0 # Placeholder
-            # domain_document.chunks_count = 0 # Placeholder
-            # domain_document.processed = False # Placeholder
             return domain_document
 
         except Exception as e:
@@ -71,16 +70,18 @@ class SqlModelDocumentRepository(DocumentRepository):
 
     def _map_domain_to_db(self, domain_doc: Document) -> DocumentoDB:
         """ Mapeia a entidade do domínio para o modelo SQLModel (DB). """
-        # Nota: Não mapeamos de volta todos os campos calculados (size_kb, processed, chunks_count)
-        # pois eles são derivados ou devem ser atualizados de outra forma no DB.
-        # O conteúdo binário também não é mapeado aqui, pois é tratado separadamente no save.
+        # Incluir os novos campos no mapeamento para inserção/atualização
         return DocumentoDB(
             id=domain_doc.id,
             nome_arquivo=domain_doc.name,
             tipo_arquivo=domain_doc.file_type,
             data_upload=domain_doc.upload_date,
-            metadados=domain_doc.metadata, # SQLModel/SQLAlchemy deve lidar com dict -> JSONB
-            # conteudo_binario = domain_doc.content # Não mapear aqui geralmente
+            metadados=domain_doc.metadata,
+            # Mapear os novos campos
+            size_kb=domain_doc.size_kb,
+            chunks_count=domain_doc.chunks_count,
+            processed=domain_doc.processed,
+            # conteudo_binario não é mapeado aqui
         )
 
     # --- Implementação dos Métodos do Repositório ---
@@ -92,13 +93,16 @@ class SqlModelDocumentRepository(DocumentRepository):
                 # Atualizar: Obter o objeto existente do DB
                 db_doc = await self._session.get(DocumentoDB, document.id)
                 if db_doc:
-                    # Atualizar os campos do objeto existente
+                    # Atualizar os campos do objeto existente a partir do domínio
                     db_doc.nome_arquivo = document.name
                     db_doc.tipo_arquivo = document.file_type
-                    # db_doc.conteudo_binario = document.content # Atualizar se necessário
                     db_doc.data_upload = document.upload_date
                     db_doc.metadados = document.metadata
-                    # db_doc.chunks_count = document.chunks_count # Atualizar se existir no modelo
+                    # Atualizar os novos campos
+                    db_doc.size_kb = document.size_kb
+                    db_doc.chunks_count = document.chunks_count
+                    db_doc.processed = document.processed
+                    # conteudo_binario não é atualizado aqui
                     logger.debug(f"Preparando para atualizar DocumentoDB ID: {document.id}")
                 else:
                     # Documento com ID fornecido não encontrado para atualização
@@ -106,15 +110,14 @@ class SqlModelDocumentRepository(DocumentRepository):
                     logger.error(f"Tentativa de atualizar DocumentoDB ID {document.id} que não existe.")
                     raise ValueError(f"Documento com ID {document.id} não encontrado para atualização.")
             else:
-                # Inserir: Criar um novo objeto DB a partir do domínio
+                # Inserir: Criar um novo objeto DB a partir do domínio (usando _map_domain_to_db atualizado)
                 db_doc = self._map_domain_to_db(document)
-                # db_doc.conteudo_binario = document.content # Adicionar conteúdo se for salvar na inserção inicial
                 self._session.add(db_doc)
                 logger.debug(f"Preparando para inserir novo DocumentoDB: {document.name}")
 
             await self._session.commit() # Salva as mudanças (INSERT ou UPDATE)
             await self._session.refresh(db_doc) # Atualiza o objeto db_doc com dados do DB (ex: ID gerado)
-            logger.info(f"Documento salvo com ID: {db_doc.id}")
+            logger.info(f"Documento salvo com ID: {db_doc.id} (SizeKB: {db_doc.size_kb:.2f}, Chunks: {db_doc.chunks_count}, Processed: {db_doc.processed})")
 
             # Retornar a entidade do domínio mapeada a partir do objeto DB atualizado/criado
             return self._map_db_to_domain(db_doc)
@@ -142,6 +145,7 @@ class SqlModelDocumentRepository(DocumentRepository):
                       print(f"[DEBUG PRINT] find_by_id: db_doc[0].nome_arquivo = {db_doc[0].nome_arquivo}")
                       # Acessar metadados pode ser problemático se for a causa do erro
                       # print(f"[DEBUG PRINT] find_by_id: db_doc[0].metadados = {db_doc[0].metadados}")
+                      print(f"[DEBUG PRINT] find_by_id: db_doc[0].size_kb = {getattr(db_doc[0], 'size_kb', 'N/A')}")
                  except Exception as access_err:
                       print(f"[DEBUG PRINT] find_by_id: Erro ao acessar atributos de db_doc[0]: {access_err}")
             else:

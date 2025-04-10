@@ -1,0 +1,15 @@
+artifact_uri: file:///C:/Projetos/cta-valuation-tech/backend/mlruns/0/6cd133762ea54928bc39cea339098d14/artifacts
+end_time: 1744218218298
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: 6cd133762ea54928bc39cea339098d14
+run_name: intrigued-colt-166
+run_uuid: 6cd133762ea54928bc39cea339098d14
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1744218217886
+status: 3
+tags: []
+user_id: erick

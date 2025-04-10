@@ -2,482 +2,799 @@ import asyncio
 import logging
 import os
 import sys
-from datasets import Dataset
-# RAGAS Imports
-from ragas import evaluate as ragas_evaluate # Renomeado para evitar conflito
+import re
+import importlib
+from typing import Optional, List, Dict, Any
+
+# --- SQLAlchemy/SQLModel Imports ---
+from sqlalchemy.ext.asyncio import (
+    create_async_engine,
+    AsyncSession,
+    AsyncEngine,
+    async_sessionmaker,
+)
+
+# --- RAGAS Imports ---
+from ragas import evaluate as ragas_evaluate
 from ragas.metrics import (
     faithfulness,
     answer_relevancy,
     context_precision,
     context_recall,
 )
+from langchain_core.embeddings import Embeddings  # Para type hint
+
 # --- DeepEval Imports ---
-from deepeval import evaluate as deepeval_evaluate # Renomeado para evitar conflito
-from deepeval.metrics import (
-    BiasMetric,
-    ToxicityMetric,
-    # SummarizationMetric, # Opcional
-    GEval               # <<< GARANTIR QUE ESTÁ IMPORTADO
-)
+from deepeval import evaluate as deepeval_evaluate
+from deepeval.metrics import BiasMetric, ToxicityMetric, GEval
 from deepeval.test_case import LLMTestCase, LLMTestCaseParams
-# --- End DeepEval Imports ---
+
 # --- MLflow Import ---
 import mlflow
-# --- End MLflow Import ---
-from collections import defaultdict # <<< Adicionar import
-import re # <<< Adicionar import para regex
 
-# --- Configuração do Caminho ---
-# Adiciona o diretório raiz do projeto (um nível acima de 'backend') ao sys.path
-# Ajuste a profundidade ('../..') se a estrutura do seu projeto for diferente
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-# --- Fim Configuração do Caminho ---
-
-# Importar componentes da aplicação APÓS configurar o path
-try:
-    # Importar o Serviço de Aplicação e talvez Interfaces/Repositórios se necessário instanciar manualmente
-    from application.services.rag_service import RAGService # Importar o serviço refatorado
-    # Importar dependências necessárias para instanciar RAGService manualmente
-    from application.interfaces.embedding_provider import EmbeddingProvider
-    from application.interfaces.llm_provider import LLMProvider
-    from domain.repositories.chunk_repository import ChunkRepository
-    # Importar implementações e provedores de dependência *se necessário* para instanciação manual
-    # Ex: from interface.api.dependencies import get_embedding_provider, get_llm_provider, get_chunk_repository, SessionDep
-    # Ex: from infrastructure.llm.providers.nvidia_provider import NvidiaProvider
-    # Ex: from infrastructure.persistence.sqlmodel.repositories.sm_chunk_repository import SqlModelChunkRepository
-    # Ex: from infrastructure.external_services.embedding.huggingface_embedding_provider import HuggingFaceEmbeddingProvider
-    # Ex: from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-
-    from evaluation.datasets.sample_eval_set import evaluation_dataset
-    from config.config import get_settings, Settings # Corrigido: de config.config
-    # Remover import do get_rag_service antigo
-    # from core.services.rag_service import get_rag_service # REMOVER
-
-except ImportError as e:
-    print(f"Erro ao importar módulos: {e}")
-    print(
-        f"Verifique se o PYTHONPATH está correto ou execute o script da raiz do projeto."
-    )
-    print(f"PROJECT_ROOT calculado: {PROJECT_ROOT}")
-    sys.exit(1)
-
-# Configuração básica de logging
+# --- Configuração do Logging PRIMEIRO ---
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+# --- Fim Configuração do Logging ---
+
+# --- (Seção de Configuração do Caminho REMOVIDA) ---
+# Assumimos que o PYTHONPATH ou WORKDIR no Docker permite encontrar 'backend'
+
+logger.info(f"Python Executable: {sys.executable}")
+logger.info(f"Initial sys.path: {sys.path}")
+logger.info(f"Current Working Directory: {os.getcwd()}")
+
+# --- Importações Essenciais (Configurações e Dados) ---
+try:
+    # Importa a função para obter configurações e a classe Settings
+    from config.config import get_settings, Settings
+
+    # Importa o dataset de avaliação
+    from evaluation.datasets.sample_eval_set import evaluation_dataset
+
+    # SQLAlchemy Async
+    from sqlalchemy.ext.asyncio import (
+        create_async_engine,
+        AsyncSession,
+        AsyncEngine,
+        async_sessionmaker,
+    )
+
+    # RAGAS
+    from ragas import evaluate as ragas_evaluate
+    from ragas.metrics import (
+        faithfulness,
+        answer_relevancy,
+        context_precision,
+        context_recall,
+    )
+    from langchain_core.embeddings import Embeddings  # Type hint para wrapper
+
+    # DeepEval
+    from deepeval import evaluate as deepeval_evaluate
+    from deepeval.metrics import BiasMetric, ToxicityMetric, GEval
+    from deepeval.test_case import LLMTestCase, LLMTestCaseParams
+
+    # MLflow
+    import mlflow
+
+    # Datasets (Hugging Face) - Importar aqui se ainda não foi importado
+    from datasets import Dataset  # Garante que está importado
+
+    # Implementações Concretas de Infraestrutura
+    from infrastructure.external_services.embedding.huggingface_embedding_provider import (
+        HuggingFaceEmbeddingProvider,
+    )
+    from infrastructure.llm.providers.nvidia_provider import NvidiaProvider
+    from infrastructure.persistence.sqlmodel.repositories.sm_chunk_repository import (
+        SqlModelChunkRepository,
+    )
+    from infrastructure.reranking.cross_encoder_reranker import CrossEncoderReRanker
+
+    # Classe do Serviço de Aplicação
+    from application.services.rag_service import RAGService
+
+    # Wrapper Langchain (para RAGAS)
+    from infrastructure.embedding.langchain_wrappers import (
+        LangChainHuggingFaceEmbeddings,
+    )
+
+    # Utilitários (se necessário mais tarde)
+    from collections import defaultdict  # Para agregação de scores DeepEval
+    import pandas as pd  # Para checar NaN e talvez mostrar resultados RAGAS
+
+    logger.info(
+        "Todas as importações essenciais e de infra/avaliação realizadas com sucesso."
+    )
+
+except ImportError as e:
+    # Log detalhado se a importação falhar
+    logger.error(f"Erro fatal ao importar configurações ou dataset: {e}", exc_info=True)
+    logger.error(
+        "Verifique se o PYTHONPATH está configurado corretamente no ambiente (Docker) e se os arquivos/pacotes existem."
+    )
+    sys.exit(1)
+except Exception as e:
+    # Captura outros erros inesperados durante a importação
+    logger.error(f"Erro inesperado durante importações essenciais: {e}", exc_info=True)
+    sys.exit(1)
+# --- Fim Importações Essenciais ---
 
 
-async def manually_create_rag_service(settings: Settings) -> RAGService:
-    """
-    Função auxiliar para instanciar RAGService e suas dependências fora do FastAPI.
-    !! ISTO É UM EXEMPLO E PRECISA SER COMPLETADO !!
-    """
-    logger.info("Instanciando dependências manualmente para RAGService...")
-
-    # 1. Criar Engine e SessionMaker (exemplo)
-    # engine = create_async_engine(settings.DATABASE_URL, echo=False)
-    # AsyncSessionFactory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-
-    # 2. Instanciar Provedores e Repositórios (exemplo)
-    # async with AsyncSessionFactory() as session:
-        # embedding_provider = HuggingFaceEmbeddingProvider() # Ou outra implementação
-        # llm_provider = NvidiaProvider() # Ou outra implementação
-        # chunk_repo = SqlModelChunkRepository(session=session)
-
-        # 3. Instanciar RAGService
-        # rag_service = RAGService(
-        #     embedding_provider=embedding_provider,
-        #     llm_provider=llm_provider,
-        #     chunk_repository=chunk_repo
-        # )
-        # return rag_service
-    logger.error("!!! A função manually_create_rag_service precisa ser implementada corretamente !!!")
-    raise NotImplementedError("Instanciação manual do RAGService não implementada.")
+# --- Funções Auxiliares (mantidas) ---
+def sanitize_mlflow_metric_name(name: str) -> str:
+    """Substitui caracteres inválidos para nomes de métricas MLflow."""
+    name = re.sub(r"[ ()/<>,.]", "_", name)  # Substitui mais caracteres problemáticos
+    name = re.sub(r"[^a-zA-Z0-9_/-]", "", name)  # Permite letras, números, _, /, -
+    name = re.sub(r"_+", "_", name)
+    name = name.strip("_")
+    return name if name else "invalid_metric_name"
 
 
+def get_library_version(library_name: str) -> str:
+    """Tenta obter a versão de uma biblioteca instalada."""
+    try:
+        lib = importlib.import_module(library_name)
+        return getattr(lib, "__version__", "unknown")
+    except ImportError:
+        return "not_found"
+    except Exception:
+        return "error_getting_version"
+
+
+# --- Implementação de prepare_evaluation_data ---
 async def prepare_evaluation_data(rag_service: RAGService) -> Dataset:
     """
-    Prepara os dados para avaliação pelo RAGAS.
-
-    Chama o RAGService para cada pergunta no dataset de avaliação
-    e coleta as respostas geradas e os contextos recuperados.
+    Prepara os dados para avaliação chamando o RAGService para cada pergunta
+    no dataset de avaliação e coletando os resultados.
     """
     processed_data = []
+    total_items = len(evaluation_dataset)
     logger.info(
-        f"Iniciando processamento de {len(evaluation_dataset)} itens do dataset de avaliação."
+        f"Iniciando preparação de dados para {total_items} itens do dataset de avaliação."
     )
 
     for i, item in enumerate(evaluation_dataset):
-        question = item["question"]
-        ground_truth_answer = item.get(
-            "ground_truth_answer"
-        )  # Usar .get para segurança
-        ground_truth_contexts = item.get("ground_truths", [])
+        question = item.get("question", "")
+        ground_truth_answer = item.get("ground_truth_answer", "")  # Resposta ideal
+        ground_truth_contexts = item.get(
+            "ground_truths", []
+        )  # Contextos ideais (List[str])
 
-        logger.info(
-            f"Processando item {i+1}/{len(evaluation_dataset)}: '{question[:50]}...'"
-        )
+        if not question:
+            logger.warning(f"Item {i+1} pulado: 'question' está vazio.")
+            continue
+
+        logger.info(f"Processando item {i+1}/{total_items}: '{question[:60]}...'")
+
+        answer = "ERRO: Falha na execução do RAGService"  # Default em caso de erro
+        contexts = []  # Default: Lista de strings dos contextos recuperados/usados
 
         try:
-            # Chama o RAGService para obter resposta e debug info (que contém os contextos)
+            # Chama o RAGService para obter resposta e debug info
+            start_query_time = asyncio.get_event_loop().time()
             result = await rag_service.process_query(
-                query=question,
-                include_debug_info=True,  # ESSENCIAL para obter os contextos
+                query=question, include_debug_info=True
+            )
+            query_duration = asyncio.get_event_loop().time() - start_query_time
+            logger.info(
+                f"Item {i+1} processado pelo RAGService em {query_duration:.2f}s."
             )
 
-            generated_answer = result.get("response", "")
-            contexts = result.get("debug_info", {}).get("contexts", [])
+            answer = result.get("response", "")
+            debug_info = result.get("debug_info", {})
 
-            if not generated_answer:
-                logger.warning(f"Resposta gerada vazia para a pergunta: {question}")
+            # --- Extração de Contexto (CRÍTICO PARA RAGAS) ---
+            final_chunk_details = debug_info.get("final_chunk_details", [])
+            placeholders_detected = False
+
+            # Verificar se temos acesso direto ao texto_content dos chunks
+            if final_chunk_details and isinstance(final_chunk_details[0], dict):
+                # Tentar extrair o texto dos chunks com várias estratégias
+                if "text_content" in final_chunk_details[0]:
+                    # Caso ideal: temos o texto diretamente
+                    contexts = [details.get("text_content", "") for details in final_chunk_details]
+                    logger.debug(f"Contextos obtidos de 'final_chunk_details[text_content]' para item {i+1}.")
+                elif "content" in final_chunk_details[0]:
+                    # Alternativa: às vezes o campo é 'content'
+                    contexts = [details.get("content", "") for details in final_chunk_details]
+                    logger.debug(f"Contextos obtidos de 'final_chunk_details[content]' para item {i+1}.")
+                elif "id" in final_chunk_details[0]:
+                    # Se temos apenas IDs, podemos tentar recuperar o texto diretamente do banco
+                    try:
+                        chunk_ids = [details.get("id") for details in final_chunk_details if details.get("id")]
+                        if chunk_ids:
+                            # Recuperar chunks usando a busca por IDs que existe (método hybrid_search)
+                            # Ao invés de tentar usar get_chunks_by_ids que não existe
+                            chunks_dict = {}
+                            for chunk_id in chunk_ids:
+                                # Usar o método existente get_chunk_by_id se disponível, ou adaptar para usar outros métodos
+                                try:
+                                    # Verificar se existe get_chunk_by_id
+                                    if hasattr(rag_service._chunk_repository, "get_chunk_by_id"):
+                                        chunk = await rag_service._chunk_repository.get_chunk_by_id(chunk_id)
+                                        if chunk:
+                                            chunks_dict[chunk_id] = chunk
+                                    else:
+                                        # Se não existe, tentar usar outra abordagem (exemplo: busca por texto)
+                                        # Este é um fallback e pode ser menos eficiente
+                                        logger.info(f"Método get_chunk_by_id não encontrado, usando alternativa para chunk ID {chunk_id}")
+                                        # Usar debug_info existente se possível
+                                        for detail in final_chunk_details:
+                                            if detail.get("id") == chunk_id and detail.get("content"):
+                                                chunks_dict[chunk_id] = type('Chunk', (), {'content': detail.get("content")})
+                                                break
+                                except Exception as e:
+                                    logger.warning(f"Erro ao recuperar chunk {chunk_id}: {e}")
+                                
+                            # Organizar os chunks na mesma ordem dos IDs originais
+                            chunks = []
+                            for chunk_id in chunk_ids:
+                                if chunk_id in chunks_dict:
+                                    chunks.append(chunks_dict[chunk_id])
+                                
+                            if chunks:
+                                contexts = [chunk.content for chunk in chunks]
+                                logger.info(f"Contextos recuperados para item {i+1}.")
+                            else:
+                                # Fallback para placeholders
+                                contexts = [f"Placeholder Context ID: {details.get('id', 'N/A')}, Doc: {details.get('doc_id', 'N/A')}" 
+                                           for details in final_chunk_details]
+                                placeholders_detected = True
+                        else:
+                            contexts = [f"Placeholder Context (No ID available) {j+1}" for j in range(len(final_chunk_details))]
+                            placeholders_detected = True
+                    except Exception as repo_err:
+                        logger.error(f"Erro ao recuperar chunks do repositório: {repo_err}", exc_info=True)
+                        # Fallback para placeholders
+                        contexts = [f"Placeholder Context ID: {details.get('id', 'N/A')}, Doc: {details.get('doc_id', 'N/A')}" 
+                                   for details in final_chunk_details]
+                        placeholders_detected = True
+                else:
+                    # Último caso: não temos nenhuma identificação útil
+                    contexts = [f"Placeholder Context {j+1}" for j in range(len(final_chunk_details))]
+                    placeholders_detected = (True if debug_info.get("num_results", 0) > 0 else False)
+            else:
+                # Fallback se não houver 'final_chunk_details' ou formato inesperado
+                contexts = [f"Placeholder Context {j+1}" for j in range(debug_info.get("num_results", 0))]
+                placeholders_detected = (True if debug_info.get("num_results", 0) > 0 else False)
+
+            if placeholders_detected:
+                logger.warning(
+                    f"Contextos para item {i+1} ('{question[:30]}...') parecem ser placeholders. Métricas de contexto RAGAS (precision/recall) serão imprecisas."
+                )
+            # --- Fim Extração de Contexto ---
+
+            if not answer:
+                logger.warning(f"Resposta gerada vazia para item {i+1}.")
             if not contexts:
                 logger.warning(
-                    f"Nenhum contexto recuperado para a pergunta: {question}"
+                    f"Nenhum contexto recuperado/processado para item {i+1}."
                 )
-            if not ground_truth_contexts and item.get("reference_page") is not None:
-                logger.warning(f"Nenhum contexto ground_truth encontrado no dataset para a pergunta: {question}. Context Recall pode não ser preciso.")
-
-            # Monta o dicionário para RAGAS
-            # Nota: RAGAS usa 'ground_truth' para a resposta esperada em answer_relevancy
-            # e 'ground_truths' (plural) para os contextos esperados em context_recall.
-            data_point = {
-                "question": question,
-                "answer": generated_answer,
-                "contexts": contexts,
-                "ground_truth": (
-                    ground_truth_answer if ground_truth_answer else ""
-                ),  # RAGAS espera string
-                "ground_truths": ground_truth_contexts,
-            }
-            processed_data.append(data_point)
+            if not ground_truth_contexts:
+                logger.warning(
+                    f"Item {i+1} não possui 'ground_truths' (contextos ideais). Context Recall será 0."
+                )
 
         except Exception as e:
             logger.error(
-                f"Erro ao processar a pergunta '{question}': {e}", exc_info=True
+                f"Erro ao processar item {i+1} ('{question[:60]}...') com RAGService: {e}",
+                exc_info=True,
             )
-            # Opcional: adicionar um item com erro ou pular
-            processed_data.append(
-                {
-                    "question": question,
-                    "answer": f"ERRO: {e}",
-                    "contexts": [],
-                    "ground_truth": ground_truth_answer if ground_truth_answer else "",
-                    "ground_truths": ground_truth_contexts,
+            answer = f"ERRO: {type(e).__name__}"  # Resposta indicando erro
+            contexts = []  # Garante lista vazia
+
+        # Adiciona o ponto de dados para o dataset RAGAS/DeepEval
+        processed_data.append(
+            {
+                "question": question,  # str: A pergunta feita
+                "answer": answer,  # str: A resposta gerada pelo RAG
+                "contexts": contexts,  # List[str]: Os textos dos chunks recuperados/usados
+                "ground_truth": ground_truth_answer,  # str: A resposta ideal esperada
+                "ground_truths": ground_truth_contexts,  # List[str]: Os textos dos chunks ideais
+            }
+        )
+
+    logger.info(
+        f"Preparação de dados concluída. {len(processed_data)} pontos de dados processados."
+    )
+
+    if not processed_data:
+        logger.warning(
+            "Nenhum dado foi processado com sucesso. Retornando dataset vazio."
+        )
+        return Dataset.from_list([])
+
+    # Converte a lista de dicionários para o formato Dataset do Hugging Face
+    try:
+        evaluation_hf_dataset = Dataset.from_list(processed_data)
+        logger.info("Dataset Hugging Face criado com sucesso.")
+        return evaluation_hf_dataset
+    except Exception as e:
+        logger.error(
+            f"Erro ao converter dados processados para Dataset Hugging Face: {e}",
+            exc_info=True,
+        )
+        # Retorna um dataset vazio em caso de erro na conversão
+        return Dataset.from_list([])
+
+
+# --- Implementação de run_evaluation ---
+async def run_evaluation(
+    ragas_dataset: Dataset, settings: Settings, embedding_model_wrapper: Embeddings
+):
+    """
+    Executa as avaliações RAGAS e DeepEval usando o dataset preparado,
+    logando parâmetros e métricas no MLflow.
+    """
+    logger.info("Iniciando a fase de avaliação RAGAS e DeepEval...")
+
+    # --- Configuração e Início da Run MLflow ---
+    # Lê URI do env var ou das settings, com fallback para diretório local
+    mlflow_uri = os.getenv(
+        "MLFLOW_TRACKING_URI", settings.MLFLOW_TRACKING_URI or "./mlruns"
+    )
+    mlflow.set_tracking_uri(mlflow_uri)
+    logger.info(f"MLflow Tracking URI configurado para: {mlflow_uri}")
+
+    try:
+        # Inicia uma nova run no MLflow
+        with mlflow.start_run() as run:
+            run_id = run.info.run_id
+            logger.info(f"Execução MLflow iniciada. Run ID: {run_id}")
+            print(f"\n--- Iniciando MLflow Run: {run_id} ---")
+            print(f"MLflow UI: {mlflow_uri}")  # Mostra onde ver a UI
+
+            # --- 1. Log Parâmetros do Experimento ---
+            logger.info("Registrando parâmetros do experimento no MLflow...")
+            try:
+                params_to_log = {
+                    "llm_model_rag": settings.LLM_MODEL,
+                    "embedding_model_rag": settings.EMBEDDING_MODEL,
+                    "vector_search_weight": settings.VECTOR_SEARCH_WEIGHT,
+                    "reranker_model": settings.RERANKER_MODEL,
+                    "chunk_size": settings.CHUNK_SIZE,
+                    "chunk_overlap": settings.CHUNK_OVERLAP,
+                    "top_k_retriever": "N/A (ver RAGService)",
+                    "dataset_size": len(ragas_dataset),
+                    "deepeval_version": get_library_version("deepeval"),
+                    "ragas_version": get_library_version("ragas"),
+                    "evaluation_llm_provider": "OpenAI (via OPENAI_API_KEY)",
                 }
-            )
-
-    logger.info("Dados processados. Convertendo para Dataset do Hugging Face.")
-    # Converte a lista de dicionários para o formato Dataset do RAGAS
-    ragas_dataset = Dataset.from_list(processed_data)
-    return ragas_dataset
-
-
-def sanitize_mlflow_metric_name(name: str) -> str:
-    """Substitui caracteres inválidos para nomes de métricas MLflow."""
-    # Substitui espaços, parênteses por underscore
-    name = re.sub(r'[ ()]', '_', name)
-    # Remove caracteres inválidos restantes (exceto os permitidos: alfanuméricos, _, -, ., /)
-    name = re.sub(r'[^a-zA-Z0-9_.\-/]', '', name)
-    # Remove múltiplos underscores consecutivos
-    name = re.sub(r'_+', '_', name)
-    # Remove underscores no início ou fim
-    name = name.strip('_')
-    return name
-
-
-async def run_evaluation(ragas_dataset: Dataset, settings: Settings):
-    """
-    Executa a avaliação RAGAS e DeepEval, registrando resultados no MLflow.
-    """
-    # === Iniciar Execução MLflow ===
-    # Por padrão, o MLflow salva os dados localmente em um diretório 'mlruns'
-    # na pasta onde o script é executado.
-    with mlflow.start_run():
-        logger.info("Execução MLflow iniciada.")
-
-        # --- Registrar Parâmetros do Experimento ---
-        try:
-            # Parâmetros importantes que influenciam os resultados
-            mlflow.log_param("llm_model", settings.LLM_MODEL)
-            mlflow.log_param("embedding_model", settings.EMBEDDING_MODEL)
-            mlflow.log_param("ragas_version", ragas_evaluate.__globals__.get('__version__', 'unknown')) # Tenta obter versão do Ragas
-            mlflow.log_param("deepeval_version", deepeval_evaluate.__globals__.get('__version__', 'unknown')) # Tenta obter versão do DeepEval
-            mlflow.log_param("VECTOR_SEARCH_WEIGHT", settings.VECTOR_SEARCH_WEIGHT)
-            # Adicionar outros parâmetros relevantes, ex: alpha, threshold, etc.
-            # mlflow.log_param("alpha_hybrid_search", settings.VECTOR_SEARCH_WEIGHT) # Exemplo
-            # mlflow.log_param("search_threshold", settings.SEARCH_THRESHOLD) # Exemplo
-            logger.info("Parâmetros registrados no MLflow.")
-        except Exception as e:
-             logger.warning(f"Falha ao registrar parâmetros no MLflow: {e}")
-        # -------------------------------------------
-
-        # === 1. RAGAS Evaluation ===
-        ragas_metrics = [
-            faithfulness,
-            answer_relevancy,
-            context_precision,
-            context_recall,
-        ]
-        logger.info(f"Iniciando avaliação RAGAS com as métricas: {[m.name for m in ragas_metrics]}")
-        ragas_evaluation_result = None
-        try:
-            ragas_evaluation_result = ragas_evaluate(
-                ragas_dataset,
-                metrics=ragas_metrics
-            )
-            logger.info("Avaliação RAGAS concluída.")
-            print("\n--- Resultados da Avaliação RAGAS ---")
-            print(ragas_evaluation_result.to_pandas())
-            print("\n--- Scores Médios RAGAS ---")
-            print(ragas_evaluation_result)
-            print("---------------------------\n")
-
-            # --- Registrar Métricas RAGAS no MLflow ---
-            if ragas_evaluation_result:
-                metric_keys_to_log = [
-                    "faithfulness",
-                    "answer_relevancy",
-                    "context_precision",
-                    "context_recall",
-                ]
-                logged_count = 0
-                for metric_name in metric_keys_to_log:
-                    try:
-                        # Acessa a LISTA de scores para a métrica
-                        scores_list = ragas_evaluation_result[metric_name]
-
-                        # Verifica se é uma lista não vazia e calcula a média
-                        if isinstance(scores_list, list) and scores_list:
-                            # Tenta calcular a média (garantindo que sejam números)
-                            numeric_scores = [s for s in scores_list if isinstance(s, (int, float))]
-                            if numeric_scores:
-                                average_score = sum(numeric_scores) / len(numeric_scores)
-                                mlflow.log_metric(f"ragas_{metric_name}", average_score)
-                                logged_count += 1
-                            else:
-                                logger.warning(f"Lista de scores para '{metric_name}' não contém valores numéricos.")
-                        elif isinstance(scores_list, (int, float)):
-                             # Caso raro onde ele retorna um único numero, loga diretamente
-                             mlflow.log_metric(f"ragas_{metric_name}", scores_list)
-                             logged_count += 1
-                        else:
-                            logger.warning(f"Não foi possível processar os scores para '{metric_name}' (tipo: {type(scores_list)}).")
-
-                    except KeyError:
-                         logger.warning(f"Métrica RAGAS '{metric_name}' não encontrada nos resultados.")
-                    except Exception as e:
-                         logger.error(f"Erro ao registrar métrica RAGAS '{metric_name}': {e}")
-
-                if logged_count > 0:
-                     logger.info(f"{logged_count} métricas RAGAS registradas no MLflow.")
-                else:
-                     logger.warning("Nenhuma métrica RAGAS foi registrada no MLflow.")
-            # -----------------------------------------
-
-        except Exception as e:
-            logger.error(f"Erro durante a avaliação RAGAS: {e}", exc_info=True)
-            print(f"\nErro durante a avaliação RAGAS: {e}")
-
-        # === 2. DeepEval Evaluation ===
-        logger.info("Preparando dados para DeepEval...")
-        test_cases = []
-        deepeval_metrics = []
-        evaluation_result_obj = None # Renomeado para clareza
-        try:
-            for row in ragas_dataset:
-                # Pula itens que tiveram erro na geração (opcional, mas recomendado)
-                if row['answer'].startswith("ERRO:"):
-                    logger.warning(f"Pulando item com erro anterior para DeepEval: {row['question'][:50]}...")
-                    continue
-
-                test_case = LLMTestCase(
-                    input=row['question'],           # A pergunta original
-                    actual_output=row['answer'],      # A resposta gerada pelo seu RAG
-                    expected_output=row['ground_truth'], # A resposta ideal (usada por algumas métricas)
-                    context=row['contexts']          # Os contextos recuperados (usado pela SummarizationMetric)
-                    # retrieval_context=row['contexts'] # Poderia ser usado também se necessário
+                mlflow.log_params(params_to_log)
+                logger.info(f"{len(params_to_log)} parâmetros registrados no MLflow.")
+            except Exception as e:
+                logger.warning(
+                    f"Falha ao registrar parâmetros no MLflow: {e}", exc_info=True
                 )
-                test_cases.append(test_case)
+
+            # --- 2. Executar Avaliação RAGAS ---
+            logger.info("Iniciando avaliação RAGAS...")
+            ragas_metrics_to_run = [
+                faithfulness,  # Usa LLM (OpenAI default)
+                answer_relevancy,  # Usa LLM e Embedding (OpenAI default + nosso)
+                context_precision,  # Usa LLM (OpenAI default)
+                context_recall,  # Usa LLM e Embedding (OpenAI default + nosso)
+            ]
+            logger.info(
+                f"Métricas RAGAS a serem executadas: {[m.name for m in ragas_metrics_to_run]}"
+            )
+
+            ragas_result = None
+            try:
+                # Executa RAGAS, passando o dataset e o wrapper de embedding.
+                # O LLM usado será o padrão (OpenAI) via API Key do ambiente.
+                ragas_result = await asyncio.to_thread(  # Executa ragas_evaluate em thread separada
+                    ragas_evaluate,
+                    dataset=ragas_dataset,
+                    metrics=ragas_metrics_to_run,
+                    embeddings=embedding_model_wrapper,
+                )
+                logger.info("Avaliação RAGAS concluída.")
+                # Opcional: Mostrar resultados no console
+                print("\n--- Scores Médios RAGAS ---")
+                print(ragas_result)
+                print("---------------------------\n")
+
+                # Após executar ragas_evaluate e receber o resultado
+                if ragas_result:
+                    # Primeiro, tente extrair as métricas usando os métodos da API
+                    try:
+                        # Converter para DataFrame para visualização
+                        ragas_df = ragas_result.to_pandas()
+                        print("\n--- Scores RAGAS Detalhados ---")
+                        print(ragas_df)
+                        print("-------------------------------\n")
+                        
+                        # Extrair média de cada métrica para logging no MLflow
+                        metric_means = {}
+                        for metric in ragas_metrics_to_run:
+                            metric_name = metric.name
+                            # Verificar se a métrica está no DataFrame
+                            if metric_name in ragas_df.columns:
+                                # Calcular média, ignorando NaN
+                                mean_value = ragas_df[metric_name].mean()
+                                metric_means[metric_name] = mean_value
+                        
+                        # Log para MLflow
+                        for metric_name, mean_value in metric_means.items():
+                            if not pd.isna(mean_value):  # Verificar se não é NaN
+                                mlflow.log_metric(f"ragas_{metric_name}", mean_value)
+                                print(f"Logged {metric_name}: {mean_value}")
+                    
+                    except Exception as e:
+                        logger.error(f"Erro ao processar resultados RAGAS: {e}", exc_info=True)
+
+            except Exception as e:
+                logger.error(
+                    f"Erro crítico durante a avaliação RAGAS: {e}", exc_info=True
+                )
+                # Logar falha no MLflow, se possível
+                try:
+                    mlflow.log_param("ragas_evaluation_status", "failed")
+                except:
+                    pass  # Ignora erro se o log falhar
+
+            # --- 3. Executar Avaliação DeepEval ---
+            logger.info("Preparando dados e iniciando avaliação DeepEval...")
+            test_cases = []
+            # Prepara os test cases a partir do dataset RAGAS
+            for i, row in enumerate(ragas_dataset):
+                # Pula itens que já tiveram erro na geração da resposta
+                if isinstance(row.get("answer"), str) and row["answer"].startswith(
+                    "ERRO:"
+                ):
+                    logger.warning(
+                        f"Pulando item {i+1} com erro anterior para DeepEval: {row.get('question', 'N/A')[:50]}..."
+                    )
+                    continue
+                # Garante que context seja List[str]
+                context_list = row.get("contexts", [])
+                if not isinstance(context_list, list):
+                    context_list = [str(context_list)]
+                if context_list and not isinstance(context_list[0], str):
+                    context_list = [str(c) for c in context_list]
+
+                test_cases.append(
+                    LLMTestCase(
+                        input=row.get("question", ""),
+                        actual_output=row.get("answer", ""),
+                        expected_output=row.get("ground_truth"),  # Pode ser None
+                        context=context_list,
+                        retrieval_context=context_list,  # Usado por algumas métricas de contexto
+                    )
+                )
 
             if not test_cases:
-                 logger.warning("Nenhum test case válido criado para DeepEval.")
+                logger.warning(
+                    "Nenhum test case válido criado para DeepEval. Avaliação pulada."
+                )
             else:
                 logger.info(f"Criados {len(test_cases)} test cases para DeepEval.")
 
-                # --- Definir Critérios para GEval ---
-                coherence_criteria = """
-                Avalie a coerência da resposta ('actual_output').
-                A resposta flui logicamente? As frases e parágrafos estão bem conectados?
-                A estrutura geral da resposta faz sentido em relação à pergunta ('input')?
-                Ignore pequenas imperfeições se a lógica geral for sólida.
-                """
-
-                linguistic_quality_criteria = """
-                Avalie a qualidade linguística da resposta ('actual_output').
-                A resposta está gramaticalmente correta? O vocabulário é apropriado e preciso?
-                A resposta é clara, concisa e fácil de entender?
-                Evite ser excessivamente crítico com pequenas falhas se a comunicação geral for eficaz.
-                """
-                # --- Fim Critérios para GEval ---
-
-                # --- NOVO Critério para Diversidade/Concisão ---
-                diversity_conciseness_criteria = """
-                Avalie a diversidade e concisão da resposta ('actual_output').
-                A resposta evita repetições desnecessárias de palavras, frases ou ideias?
-                A resposta vai direto ao ponto, fornecendo a informação solicitada pela pergunta ('input') sem ser excessivamente verbosa ou prolixa?
-                Uma resposta concisa e variada deve receber um score alto. Uma resposta repetitiva ou que adiciona informações não essenciais deve receber um score baixo.
-                """
-                # --- Fim NOVO Critério ---
-
                 # Define as métricas DeepEval
+                # ATENÇÃO: Alterado 'gpt-4' para 'gpt-4-turbo'
                 deepeval_metrics = [
-                    BiasMetric(threshold=0.5),
-                    ToxicityMetric(threshold=0.5),
+                    BiasMetric(threshold=0.5, model="gpt-4-turbo", strict_mode=False),
+                    ToxicityMetric(threshold=0.5, model="gpt-4-turbo", strict_mode=False),
                     GEval(
-                        name="Coerência (GEval)",
-                        criteria=coherence_criteria,
-                        evaluation_params=[LLMTestCaseParams.INPUT, LLMTestCaseParams.ACTUAL_OUTPUT],
-                        threshold=0.5
+                        name="Coerência",
+                        criteria="Avalie a coerência da resposta ('actual_output') em relação à pergunta ('input').",
+                        evaluation_params=[
+                            LLMTestCaseParams.INPUT,
+                            LLMTestCaseParams.ACTUAL_OUTPUT,
+                        ],
+                        model="gpt-4-turbo",
+                        threshold=0.5,
                     ),
                     GEval(
-                        name="Qualidade Linguística (GEval)",
-                        criteria=linguistic_quality_criteria,
+                        name="Qualidade_Linguística",
+                        criteria="Avalie a qualidade linguística (gramática, clareza, concisão) da resposta ('actual_output').",
                         evaluation_params=[LLMTestCaseParams.ACTUAL_OUTPUT],
-                        threshold=0.5
+                        model="gpt-4-turbo",
+                        threshold=0.5,
                     ),
                     GEval(
-                        name="Diversidade/Concisão (GEval)",
-                        criteria=diversity_conciseness_criteria,
-                        evaluation_params=[LLMTestCaseParams.INPUT, LLMTestCaseParams.ACTUAL_OUTPUT],
-                        threshold=0.5
-                    )
+                        name="Relevância_Contextual",
+                        criteria="Avalie se a resposta ('actual_output') é relevante e baseada nos contextos ('context') fornecidos.",
+                        evaluation_params=[
+                            LLMTestCaseParams.ACTUAL_OUTPUT,
+                            LLMTestCaseParams.CONTEXT,
+                        ],
+                        model="gpt-4-turbo",
+                        threshold=0.5,
+                    ),
                 ]
-                logger.info(f"Iniciando avaliação DeepEval com as métricas: {[m.name if hasattr(m, 'name') else m.__class__.__name__ for m in deepeval_metrics]}")
-
-                # --- Executa a avaliação e captura o objeto EvaluationResult ---
-                evaluation_result_obj = deepeval_evaluate( # <<< Captura o objeto EvaluationResult
-                    test_cases=test_cases,
-                    metrics=deepeval_metrics,
-                    print_results=False
+                logger.info(
+                    f"Métricas DeepEval a serem executadas: {[m.name if hasattr(m, 'name') else m.__class__.__name__ for m in deepeval_metrics]}"
                 )
-                logger.info("Avaliação DeepEval concluída.")
 
-                # --- Calcular Médias e Registrar Métricas DeepEval no MLflow ---
-                if evaluation_result_obj and hasattr(evaluation_result_obj, 'test_results'):
-                    actual_test_results = evaluation_result_obj.test_results
-                    if not actual_test_results:
-                         logger.warning("O objeto EvaluationResult não contém resultados de testes ('test_results' está vazio).")
+                deepeval_result = None
+                try:
+                    # Executa DeepEval. Pode demorar e fazer várias chamadas à API OpenAI.
+                    # ATENÇÃO: Requer OPENAI_API_KEY configurada no ambiente!
+                    deepeval_result = await asyncio.to_thread(  # Executa deepeval_evaluate em thread separada
+                        deepeval_evaluate,
+                        test_cases=test_cases,
+                        metrics=deepeval_metrics,
+                        print_results=False,  # Evita print massivo
+                    )
+                    logger.info("Avaliação DeepEval concluída.")
 
-                    metric_scores = defaultdict(list)
-                    metric_names = {}
+                    # Log DeepEval metrics to MLflow
+                    if deepeval_result:
+                        logger.info(f"Tipo do objeto DeepEval: {type(deepeval_result)}")
+                        deepeval_logged_count = 0
+                        
+                        # Baseado na implementação anterior que funcionava
+                        if hasattr(deepeval_result, 'test_results'):
+                            actual_test_results = deepeval_result.test_results
+                            if actual_test_results:
+                                metric_scores = defaultdict(list)
+                                metric_names = {}
 
-                    for result in actual_test_results:
-                         if not hasattr(result, 'metrics_data'):
-                              logger.warning(f"Objeto TestResult não possui o atributo 'metrics_data'. Tipo: {type(result)}. Pulando.")
-                              continue
+                                for result in actual_test_results:
+                                    if hasattr(result, 'metrics_data'):
+                                        for metric_metadata in result.metrics_data:
+                                            metric_internal_name = metric_metadata.name
+                                            # Registra o nome para uso posterior
+                                            metric_names[metric_internal_name] = metric_internal_name
 
-                         for metric_metadata in result.metrics_data:
-                            metric_internal_name = metric_metadata.name
-                            # Tenta obter o nome 'bonito' (GEval)
-                            original_metric = next((m for m in deepeval_metrics if (hasattr(m, 'name') and m.name == metric_internal_name) or m.__class__.__name__ == metric_internal_name), None)
-                            log_name = metric_internal_name
-                            if original_metric and hasattr(original_metric, 'name') and original_metric.name:
-                                log_name = original_metric.name # Usa o nome que definimos, se houver
+                                            # Coleta o score se for numérico
+                                            if hasattr(metric_metadata, 'score') and isinstance(metric_metadata.score, (int, float)):
+                                                metric_scores[metric_internal_name].append(metric_metadata.score)
 
-                            metric_names[metric_internal_name] = log_name # Guarda mapeamento
+                                # Calcula e registra as médias no MLflow
+                                for metric_internal_name, scores in metric_scores.items():
+                                    if scores:
+                                        average_score = sum(scores) / len(scores)
+                                        sanitized_name = sanitize_mlflow_metric_name(f"deepeval_{metric_internal_name}")
+                                        mlflow.log_metric(sanitized_name, average_score)
+                                        deepeval_logged_count += 1
+                                        logger.info(f"Métrica DeepEval '{metric_internal_name}': {average_score:.4f}")
+                                
+                                if deepeval_logged_count > 0:
+                                    logger.info(f"{deepeval_logged_count} métricas DeepEval registradas com sucesso no MLflow.")
+                                else:
+                                    logger.warning("Nenhuma métrica com scores numéricos encontrada nos resultados DeepEval.")
+                            else:
+                                logger.warning("O objeto DeepEval contém 'test_results', mas está vazio.")
+                        else:
+                            # Segunda tentativa: verificar se há métricas diretamente no objeto de resultado
+                            metrics_found = False
+                            
+                            # Tenta acessar estruturas alternativas que podem existir na versão 2.6.6
+                            try:
+                                # Exibe todos os atributos disponíveis para debug
+                                logger.info(f"Atributos do objeto DeepEval: {dir(deepeval_result)}")
+                                
+                                # Verifica se o objeto tem um atributo que contém as métricas
+                                for attr_name in ['metrics', 'results', 'test_cases', 'evaluation_results']:
+                                    if hasattr(deepeval_result, attr_name):
+                                        attr_value = getattr(deepeval_result, attr_name)
+                                        logger.info(f"Encontrado atributo '{attr_name}': {type(attr_value)}")
+                                        metrics_found = True
+                                        
+                                        # Tenta processar este atributo se for uma coleção
+                                        if isinstance(attr_value, (list, tuple)) and attr_value:
+                                            for item in attr_value:
+                                                # Log para debug
+                                                logger.info(f"Item em '{attr_name}': {type(item)}")
+                                                
+                                                # Tenta extrair métricas deste item
+                                                if hasattr(item, 'score') and isinstance(item.score, (int, float)):
+                                                    name = getattr(item, 'name', attr_name)
+                                                    sanitized_name = sanitize_mlflow_metric_name(f"deepeval_{name}")
+                                                    mlflow.log_metric(sanitized_name, item.score)
+                                                    deepeval_logged_count += 1
+                                                    logger.info(f"Métrica DeepEval '{name}': {item.score:.4f}")
+                                
+                                if not metrics_found:
+                                    logger.warning("Não foi possível encontrar estruturas de métricas conhecidas no objeto DeepEval.")
+                            except Exception as e:
+                                logger.error(f"Erro ao tentar extrações alternativas: {e}")
+                            
+                            # Se chegamos aqui sem encontrar métricas, exibimos um aviso final
+                            if deepeval_logged_count == 0:
+                                logger.warning("Nenhuma métrica DeepEval processada com sucesso para registro no MLflow.")
 
-                            if isinstance(metric_metadata.score, (int, float)):
-                                metric_scores[metric_internal_name].append(metric_metadata.score)
+                except Exception as e:
+                    # Captura erros como RateLimitError da OpenAI, etc.
+                    logger.error(
+                        f"Erro crítico durante a avaliação DeepEval: {e}", exc_info=True
+                    )
+                    # Logar falha no MLflow
+                    try:
+                        mlflow.log_param("deepeval_evaluation_status", "failed")
+                    except:
+                        pass  # Ignora erro no log
 
-                    # Calcula e Loga as Médias
-                    deepeval_logged_count = 0
-                    for metric_internal_name, scores in metric_scores.items():
-                        if scores:
-                            average_score = sum(scores) / len(scores)
-                            # Obtém o nome que queremos usar para log (pode ser o de GEval)
-                            raw_log_metric_name = metric_names.get(metric_internal_name, metric_internal_name)
-                            # Sanitiza o nome antes de logar <<< MUDANÇA AQUI
-                            sanitized_log_metric_name = sanitize_mlflow_metric_name(raw_log_metric_name)
+            # --- Fim da Run MLflow ---
+            logger.info(f"Finalizando MLflow Run: {run_id}")
+            print(f"--- MLflow Run {run_id} Concluída ---")
 
-                            mlflow.log_metric(f"deepeval_{sanitized_log_metric_name}", average_score) # <<< Usa nome sanitizado
-                            deepeval_logged_count += 1
-                            # Log no console pode usar o nome original ou sanitizado
-                            logger.info(f"Métrica DeepEval '{raw_log_metric_name}' (média): {average_score:.4f} -> Logged as 'deepeval_{sanitized_log_metric_name}'")
-
-                    if deepeval_logged_count > 0:
-                        logger.info(f"{deepeval_logged_count} métricas DeepEval (médias) registradas no MLflow.")
-                    else:
-                        logger.warning("Nenhuma métrica DeepEval com scores numéricos encontrada nos resultados para calcular médias.")
-
-                elif evaluation_result_obj:
-                     logger.warning("O objeto retornado por deepeval_evaluate não possui o atributo 'test_results'. Verifique a estrutura.")
-                else:
-                     logger.warning("A função deepeval_evaluate não retornou um objeto de resultado.")
-            # ---------------------------------------------
-
-        except Exception as e:
-            # O erro INVALID_PARAMETER_VALUE acontecerá aqui se a sanitização falhar
-            logger.error(f"Erro durante a avaliação DeepEval ou processamento/log: {e}", exc_info=True)
-            print(f"\nErro durante a avaliação DeepEval ou processamento: {e}")
-            print("Verifique a configuração da API Key (OpenAI) e se os modelos necessários estão acessíveis.")
-
-        # --- Opcional: Registrar Dataset como Artefato ---
-        # try:
-        #     dataset_path = "/app/evaluation/datasets/sample_eval_set.py"
-        #     if os.path.exists(dataset_path):
-        #          mlflow.log_artifact(dataset_path, artifact_path="evaluation_dataset")
-        #          logger.info(f"Dataset de avaliação registrado como artefato MLflow.")
-        #     else:
-        #          logger.warning(f"Arquivo do dataset não encontrado em {dataset_path} para registrar como artefato.")
-        # except Exception as e:
-        #      logger.warning(f"Falha ao registrar dataset como artefato MLflow: {e}")
-        # -------------------------------------------------
-
-        logger.info("Execução MLflow concluída.")
-
-
-async def main():
-    """
-    Função principal para orquestrar a preparação dos dados e a avaliação.
-    """
-    logger.info("Obtendo configurações...")
-    settings = None
-    try:
-        settings = get_settings() # Obter configurações
-        # ----- Ponto Crítico de Refatoração -----
-        # Substituir a chamada antiga por instanciação manual
-        # rag_service_old = get_rag_service() # REMOVER
-        rag_service = await manually_create_rag_service(settings) # Implementar esta função!
-        # ---------------------------------------
-        logger.info("RAGService instanciado manualmente.")
-    except NotImplementedError as nie:
-         logger.error(f"Erro: {nie}")
-         print(f"ERRO: {nie}")
-         return
-    except Exception as e:
-        logger.error(f"Falha ao inicializar o RAGService: {e}", exc_info=True)
-        print(
-            f"ERRO: Não foi possível inicializar o RAGService. Verifique as configurações e logs. Erro: {e}"
+    except Exception as mlflow_exc:
+        # Captura erro ao iniciar a run do MLflow (ex: URI inválido)
+        logger.error(
+            f"Erro ao configurar ou iniciar a run do MLflow: {mlflow_exc}",
+            exc_info=True,
         )
-        return
-
-    prepared_dataset = await prepare_evaluation_data(rag_service)
-    if prepared_dataset and settings: # Verifica se settings foi carregado
-        await run_evaluation(prepared_dataset, settings) # Passar settings
-    else:
-        logger.error("Falha ao preparar os dados ou carregar configurações para avaliação.")
+        print(
+            f"\nERRO: Falha ao iniciar ou executar a run do MLflow. Verifique a configuração do MLFLOW_TRACKING_URI ({mlflow_uri})."
+        )
 
 
-if __name__ == "__main__":
-    # Verifica se está executando como script principal
-    # Garante que o loop de eventos asyncio seja iniciado corretamente
+# --- Função Principal (main) ---
+async def main():
+    """Função principal para orquestrar a avaliação."""
+    logger.info("Iniciando a execução do script de avaliação RAG (modo Docker)...")
+    settings: Optional[Settings] = None
+    engine: Optional[AsyncEngine] = None
+    embedding_provider: Optional[HuggingFaceEmbeddingProvider] = None
+    llm_provider: Optional[NvidiaProvider] = None
+    reranker: Optional[CrossEncoderReRanker] = None
+    langchain_embedding_wrapper: Optional[LangChainHuggingFaceEmbeddings] = None
+    async_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
+    rag_service: Optional[RAGService] = None
+
     try:
+        # 1. Carregar Configurações
+        settings = get_settings()
+        logger.info("Configurações carregadas.")
+        
+        # Configurar OpenAI API Key do settings para as bibliotecas de avaliação
+        if settings.OPENAI_API_KEY:
+            # Para RAGAS e outras bibliotecas que usam OpenAI
+            os.environ["OPENAI_API_KEY"] = settings.OPENAI_API_KEY
+            logger.info("OPENAI_API_KEY configurada a partir do settings (.env)")
+        else:
+            logger.warning("OPENAI_API_KEY não encontrada no settings (.env). Dependendo de variáveis de ambiente.")
+        
+        logger.info(f"Dataset carregado ({len(evaluation_dataset)} itens).")
+
+        # 2. Criar Engine SQLAlchemy Async
+        if not settings.DATABASE_URL:
+            raise ValueError("DATABASE_URL não configurada.")
+        logger.info(f"Criando engine SQLAlchemy...")
+        try:
+            engine = create_async_engine(
+                settings.DATABASE_URL, echo=False, pool_pre_ping=True
+            )
+        except Exception as db_exc:
+            raise RuntimeError(f"Falha ao criar AsyncEngine: {db_exc}") from db_exc
+        logger.info("AsyncEngine criado.")
+
+        # 3. Instanciar Provedores
+        logger.info("Instanciando provedores...")
+        try:
+            embedding_provider = HuggingFaceEmbeddingProvider()
+            llm_provider = NvidiaProvider()
+            reranker = CrossEncoderReRanker()
+        except Exception as provider_exc:
+            raise RuntimeError(
+                f"Falha ao instanciar provedores: {provider_exc}"
+            ) from provider_exc
+        logger.info("Provedores instanciados.")
+
+        # 4. Criar Wrapper Langchain Embedding
+        if not embedding_provider:
+            raise ValueError("Embedding Provider não instanciado.")
+        logger.info("Criando wrapper Langchain Embedding...")
+        try:
+            langchain_embedding_wrapper = LangChainHuggingFaceEmbeddings(
+                provider=embedding_provider
+            )
+        except Exception as wrapper_exc:
+            raise RuntimeError(
+                f"Falha ao criar wrapper Langchain Embedding: {wrapper_exc}"
+            ) from wrapper_exc
+        logger.info("Wrapper Langchain Embedding criado.")
+
+        # 5. Criar Session Factory
+        if not engine:
+            raise ValueError("Engine não criado.")
+        logger.info("Criando fábrica de sessões SQLAlchemy...")
+        try:
+            async_session_factory = async_sessionmaker(
+                engine, class_=AsyncSession, expire_on_commit=False
+            )
+        except Exception as factory_exc:
+            raise RuntimeError(
+                f"Falha ao criar fábrica de sessões: {factory_exc}"
+            ) from factory_exc
+        logger.info("Fábrica de sessões criada.")
+
+        # --- Lógica Principal com Sessão ---
+        if not async_session_factory:
+            raise ValueError("Fábrica de sessões não criada.")
+        if not all(
+            [embedding_provider, llm_provider, reranker, langchain_embedding_wrapper]
+        ):
+            raise ValueError("Componentes não instanciados.")
+
+        logger.info("Iniciando contexto de sessão para avaliação...")
+        async with async_session_factory() as session:
+            logger.info("Sessão async iniciada.")
+
+            # 7. Instanciar Repositório
+            logger.info("Instanciando repositório Chunk...")
+            try:
+                chunk_repo = SqlModelChunkRepository(session=session)
+            except Exception as repo_exc:
+                raise RuntimeError(
+                    f"Falha ao instanciar repositório Chunk: {repo_exc}"
+                ) from repo_exc
+            logger.info("Repositório Chunk instanciado.")
+
+            # 8. Instanciar RAGService
+            logger.info("Instanciando RAGService...")
+            try:
+                if not all([embedding_provider, llm_provider, chunk_repo, reranker]):
+                    raise ValueError("Dependência nula.")
+                rag_service = RAGService(
+                    embedding_provider=embedding_provider,
+                    llm_provider=llm_provider,
+                    chunk_repository=chunk_repo,
+                    reranker=reranker,
+                )
+            except Exception as service_exc:
+                raise RuntimeError(
+                    f"Falha ao instanciar RAGService: {service_exc}"
+                ) from service_exc
+            logger.info("RAGService instanciado.")
+
+            # 9. Preparar Dados
+            logger.info("Preparando dados para avaliação...")
+            prepared_hf_dataset = await prepare_evaluation_data(rag_service)
+
+            # 10. Executar Avaliação
+            if prepared_hf_dataset and len(prepared_hf_dataset) > 0:
+                logger.info(
+                    f"Iniciando a execução da avaliação com {len(prepared_hf_dataset)} pontos de dados..."
+                )
+                await run_evaluation(
+                    prepared_hf_dataset, settings, langchain_embedding_wrapper
+                )
+            else:
+                logger.error(
+                    "Dataset preparado vazio ou com falha na criação. Nenhuma avaliação será executada."
+                )
+
+            logger.info("Saindo do contexto da sessão.")
+        logger.info("Contexto de sessão finalizado.")
+
+    except Exception as e:
+        logger.error(f"Erro durante a execução do script: {e}", exc_info=True)
+
+    finally:
+        # 11. Limpar Engine
+        if engine:
+            logger.info("Finalizando engine SQLAlchemy...")
+            try:
+                await engine.dispose()
+            except Exception as dispose_exc:
+                logger.error(f"Erro ao finalizar engine: {dispose_exc}", exc_info=True)
+            logger.info("Engine finalizado.")
+        else:
+            logger.info("Nenhum engine SQLAlchemy para finalizar.")
+
+        logger.info("Script de avaliação finalizado.")
+
+
+# --- Ponto de Entrada do Script (sem mudanças) ---
+if __name__ == "__main__":
+    logger.info(f"Executando script diretamente: {__file__}")
+    try:
+        # Ajustado para chamar a função main atualizada
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\nExecução interrompida pelo usuário.")
+        logger.info("Execução interrompida pelo usuário.")
     except Exception as e:
-        print(f"\nErro inesperado na execução principal: {e}")
-        logger.critical(f"Erro fatal na execução: {e}", exc_info=True)
+        logger.critical(
+            f"Erro fatal não tratado na execução principal: {e}", exc_info=True
+        )
+        sys.exit(1)

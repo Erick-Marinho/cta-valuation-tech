@@ -5,7 +5,7 @@ Utilitários compartilhados para a aplicação CTA Value Tech.
 from .logging import configure_logging, get_logger
 from .validation import validate_text, validate_file_type, validate_query
 from .metrics import track_timing
-from .telemetry import setup_telemetry, get_tracer
+from .telemetry import initialize_telemetry, get_tracer
 from .metrics_prometheus import (
     update_system_metrics,
     init_app_info,
@@ -37,7 +37,7 @@ __all__ = [
     # Métricas básicas
     "track_timing",
     # Telemetria
-    "setup_telemetry",
+    "initialize_telemetry",
     "get_tracer",
     # Métricas Prometheus
     "update_system_metrics",

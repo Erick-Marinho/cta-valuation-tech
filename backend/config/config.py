@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str = "postgres"
     POSTGRES_DB: str = "vectordb"
     POSTGRES_PORT: str = "5433"
+    DB_PASSWORD: Optional[str] = None
 
     # Configurações PGAdmin
     PGADMIN_DEFAULT_EMAIL: str = "admin@admin.com"

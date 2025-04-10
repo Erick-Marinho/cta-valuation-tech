@@ -1,0 +1,15 @@
+artifact_uri: file:///C:/Projetos/cta-valuation-tech/backend/mlruns/0/3cf76ad3659e4037a436d012457ead87/artifacts
+end_time: 1744217986612
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: 3cf76ad3659e4037a436d012457ead87
+run_name: receptive-mink-385
+run_uuid: 3cf76ad3659e4037a436d012457ead87
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1744217985755
+status: 3
+tags: []
+user_id: erick

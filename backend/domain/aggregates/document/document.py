@@ -5,7 +5,6 @@ Modelo de domínio para representar documentos na aplicação CTA Value Tech.
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any
 from datetime import datetime
-import json
 
 
 @dataclass
@@ -20,13 +19,13 @@ class Document:
     id: Optional[int] = None
     name: str = ""
     file_type: str = ""
-    content: bytes = field(default_factory=bytes)
     upload_date: datetime = field(default_factory=datetime.now)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
-    # Atributos calculados
+    # Atributos calculados ou de estado pós-processamento
     chunks_count: int = 0
     processed: bool = False
+    size_kb: float = 0.0
 
     @property
     def file_extension(self) -> str:
@@ -45,16 +44,6 @@ class Document:
         return ""
 
     @property
-    def size_kb(self) -> float:
-        """
-        Retorna o tamanho do arquivo em KB.
-
-        Returns:
-            float: Tamanho em KB
-        """
-        return len(self.content) / 1024
-
-    @property
     def is_pdf(self) -> bool:
         """
         Verifica se o documento é um PDF.
@@ -69,7 +58,7 @@ class Document:
         Converte o documento para um dicionário.
 
         Args:
-            include_content: Se True, inclui o conteúdo binário
+            include_content: Se True, inclui o conteúdo binário (agora ignorado)
 
         Returns:
             dict: Representação do documento como dicionário
@@ -84,8 +73,5 @@ class Document:
             "processed": self.processed,
             "size_kb": self.size_kb,
         }
-
-        if include_content:
-            result["content"] = self.content
 
         return result

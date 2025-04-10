@@ -14,7 +14,7 @@ from utils.metrics_prometheus import (
     REQUEST_LATENCY,
     update_system_metrics,
 )
-from utils.telemetry import setup_telemetry
+from utils.telemetry import initialize_telemetry
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 # Importações dos módulos da aplicação
@@ -72,7 +72,7 @@ async def lifespan(app: FastAPI):
 
     # Inicializar OpenTelemetry
     try:
-        setup_telemetry() # Chamar sem argumentos
+        initialize_telemetry(service_name=settings.OTEL_SERVICE_NAME, otlp_endpoint=settings.OTEL_EXPORTER_OTLP_ENDPOINT)
         logger.info("OpenTelemetry inicializado com sucesso")
     except Exception as e:
         logger.error(f"Falha ao inicializar OpenTelemetry: {e}")

@@ -22,6 +22,11 @@ class DocumentoDB(SQLModel, table=True):
     )
     metadados: Optional[Dict[str, Any]] = Field(default_factory=dict, sa_column=Column(JSONB))
 
+    # --- CAMPOS ADICIONADOS ---
+    size_kb: Optional[float] = Field(default=0.0) # Para armazenar o tamanho do arquivo
+    chunks_count: Optional[int] = Field(default=0) # Para armazenar a contagem de chunks
+    processed: Optional[bool] = Field(default=False) # Para indicar status de processamento
+
 class ChunkDB(SQLModel, table=True):
     """ Modelo SQLModel para a tabela 'chunks_vetorizados'. """
     __tablename__ = "chunks_vetorizados"

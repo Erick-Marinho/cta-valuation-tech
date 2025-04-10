@@ -61,10 +61,9 @@ class SqlModelChunkRepository(ChunkRepository):
             id=domain_chunk.id,
             documento_id=domain_chunk.document_id,
             texto=domain_chunk.text,
-            embedding=domain_chunk.embedding, # Passar List[float], pgvector lida com a conversão
+            embedding=domain_chunk.embedding,
             pagina=domain_chunk.page_number,
             posicao=domain_chunk.position,
-            # Garantir que metadados são serializáveis para JSON/JSONB
             metadados=json.dumps(domain_chunk.metadata) if isinstance(domain_chunk.metadata, dict) else domain_chunk.metadata
         )
 
@@ -283,6 +282,13 @@ class SqlModelChunkRepository(ChunkRepository):
 
         # Realizar as buscas individuais em paralelo
         try:
+            # --- ADICIONAR ESTA LINHA ANTES DO GATHER ---
+            # Garante que a conexão da sessão esteja pronta antes das chamadas concorrentes
+            logger.debug("Garantindo conexão da sessão antes das buscas concorrentes...")
+            await self._session.connection()
+            logger.debug("Conexão da sessão garantida.")
+            # ---------------------------------------------
+
             vector_results_task = self.find_similar(embedding, individual_limit, document_ids)
             fts_results_task = self.find_by_fts(query_text, individual_limit, document_ids)
 
@@ -335,3 +341,37 @@ class SqlModelChunkRepository(ChunkRepository):
 
         logger.info(f"Busca híbrida RRF finalizou com {len(final_results)} chunks.")
         return final_results
+
+    async def get_chunk_by_id(self, chunk_id: int):
+        """Recupera um chunk específico pelo ID."""
+        try:
+            from sqlalchemy import text
+            
+            # Usar SQLAlchemy text() corretamente para declarar a expressão SQL
+            query = text("""
+                SELECT id, documento_id, texto as content, pagina, posicao, metadados 
+                FROM chunks_vetorizados 
+                WHERE id = :chunk_id
+            """)
+            
+            # Executar query com parâmetros adequadamente
+            result = await self._session.execute(query, {"chunk_id": chunk_id})
+            row = result.fetchone()
+            
+            if row:
+                # Criar um objeto com os campos necessários
+                from types import SimpleNamespace
+                # Usando SimpleNamespace como uma forma conveniente de criar um objeto com atributos
+                chunk = SimpleNamespace(
+                    id=row.id,
+                    documento_id=row.documento_id,
+                    content=row.content,
+                    pagina=row.pagina,
+                    posicao=row.posicao,
+                    metadados=row.metadados
+                )
+                return chunk
+            return None
+        except Exception as e:
+            logger.error(f"Erro ao buscar chunk por ID {chunk_id}: {e}")
+            return None
