@@ -18,6 +18,7 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 from application.interfaces.embedding_provider import EmbeddingProvider
 import asyncio
 from sentence_transformers import SentenceTransformer
+from domain.value_objects.embedding import Embedding
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +132,7 @@ class HuggingFaceEmbeddingProvider(EmbeddingProvider):
                     f"Falha ao inicializar modelo de embeddings: {e}"
                 ) from e
 
-    async def embed_text(self, text: str) -> List[float]:
+    async def embed_text(self, text: str) -> Embedding:
         """
         Gera embedding para um texto único.
 
@@ -139,7 +140,7 @@ class HuggingFaceEmbeddingProvider(EmbeddingProvider):
             text: Texto para gerar embedding
 
         Returns:
-            list: Vetor de embedding
+            Embedding: Objeto de embedding
         """
         with self.tracer.start_as_current_span(
             "embedding_service.embed_text", kind=SpanKind.INTERNAL
@@ -155,7 +156,7 @@ class HuggingFaceEmbeddingProvider(EmbeddingProvider):
                 span.set_status(
                     Status(StatusCode.OK, "Texto vazio, retornando vetor zero.")
                 )
-                return [0.0] * self.settings.EMBEDDING_DIMENSION
+                return Embedding(vector=[0.0] * self.settings.EMBEDDING_DIMENSION)
 
             clean_text = clean_text_for_embedding(text).lower()
             span.set_attribute("vector.cleaned_text_length", len(clean_text))
@@ -178,7 +179,7 @@ class HuggingFaceEmbeddingProvider(EmbeddingProvider):
                 span.set_attribute("duration_ms", int(elapsed_time * 1000))
                 span.set_attribute("vector.dimension", len(cached_embedding))
                 span.set_status(Status(StatusCode.OK))
-                return cached_embedding
+                return Embedding(vector=cached_embedding)
 
             span.set_attribute("cache.hit", False)
             self._cache_misses += 1
@@ -188,15 +189,22 @@ class HuggingFaceEmbeddingProvider(EmbeddingProvider):
             span.set_attribute("cache.hit_ratio", hit_ratio)
 
             try:
-                embeddings = await self.embed_batch([text])
-                if embeddings and len(embeddings) == 1:
-                    span.set_attribute("embedding.vector_length", len(embeddings[0]))
+                embeddings_list: List[Embedding] = await self.embed_batch([text])
+                if embeddings_list and len(embeddings_list) == 1:
+                    embedding_obj = embeddings_list[0]
+                    span.set_attribute("embedding.vector_length", len(embedding_obj.vector))
                     span.set_status(Status(StatusCode.OK))
-                    return embeddings[0]
+
+                    if cache_key not in self._cache and len(self._cache) < 10000:
+                        self._cache[cache_key] = embedding_obj.vector
+                        update_embedding_cache_metrics("size", len(self._cache))
+
+                    return embedding_obj
                 else:
                     logger.error(f"embed_batch não retornou o resultado esperado para texto único: {text[:100]}...")
                     span.set_status(Status(StatusCode.ERROR, "Resultado inesperado de embed_batch"))
-                    return [0.0] * self.settings.EMBEDDING_DIMENSION
+                    zero_vec = [0.0] * self.settings.EMBEDDING_DIMENSION
+                    return Embedding(vector=zero_vec)
 
             except Exception as e:
                 elapsed_time = time.time() - start_time
@@ -205,9 +213,10 @@ class HuggingFaceEmbeddingProvider(EmbeddingProvider):
                 span.record_exception(e)
                 span.set_status(Status(StatusCode.ERROR, description=str(e)))
                 span.set_attribute("error.type", type(e).__name__)
-                return [0.0] * self.settings.EMBEDDING_DIMENSION
+                zero_vec = [0.0] * self.settings.EMBEDDING_DIMENSION
+                return Embedding(vector=zero_vec)
 
-    async def embed_batch(self, texts: List[str]) -> List[List[float]]:
+    async def embed_batch(self, texts: List[str]) -> List[Embedding]:
         """
         Gera embeddings para múltiplos textos em lote.
 
@@ -215,7 +224,7 @@ class HuggingFaceEmbeddingProvider(EmbeddingProvider):
             texts: Lista de textos para gerar embeddings
 
         Returns:
-            list: Lista de vetores de embedding
+            list: Lista de objetos de embedding
         """
         with self.tracer.start_as_current_span(
             "embedding_service.embed_batch", kind=SpanKind.INTERNAL
@@ -247,7 +256,7 @@ class HuggingFaceEmbeddingProvider(EmbeddingProvider):
             span.set_attribute("vector.unique_texts_count", len(clean_texts_map))
             span.set_attribute("vector.avg_unique_text_length", avg_len)
 
-            embeddings: List[Optional[List[float]]] = [None] * batch_size
+            embeddings: List[Optional[Embedding]] = [None] * batch_size
             texts_to_embed_list: List[str] = []
             cache_hits_in_batch = 0
             initial_miss_count = self._cache_misses
@@ -259,7 +268,7 @@ class HuggingFaceEmbeddingProvider(EmbeddingProvider):
                     cache_hits_in_batch += len(indices)
                     self._cache_hits += len(indices)
                     for i in indices:
-                        embeddings[i] = cached_embedding
+                        embeddings[i] = Embedding(vector=cached_embedding)
                 else:
                     texts_to_embed_list.append(clean_text)
 
@@ -280,28 +289,37 @@ class HuggingFaceEmbeddingProvider(EmbeddingProvider):
                         return self.model.encode(texts_to_embed_list, convert_to_numpy=True, show_progress_bar=False)
 
                     new_embeddings_np = await asyncio.to_thread(sync_embed_documents)
-                    new_embeddings = [embedding.tolist() for embedding in new_embeddings_np]
+                    new_embeddings_vectors: List[List[float]] = [embedding.tolist() for embedding in new_embeddings_np]
 
                     self._total_embeddings += uncached_count
 
                     cache_updated = False
                     if len(self._cache) < 10000:
                         space_available = 10000 - len(self._cache)
-                        can_add_count = min(space_available, len(new_embeddings))
+                        can_add_count = min(space_available, len(new_embeddings_vectors))
                         for i in range(can_add_count):
                             clean_text = texts_to_embed_list[i]
-                            embedding = new_embeddings[i]
+                            embedding = new_embeddings_vectors[i]
                             cache_key = hash(clean_text)
                             self._cache[cache_key] = embedding
                             cache_updated = True
                         span.set_attribute("cache.added_count", can_add_count)
-                        if can_add_count < len(new_embeddings):
+                        if can_add_count < len(new_embeddings_vectors):
                             span.set_attribute("cache.full", True)
 
-                    for i, embedding in enumerate(new_embeddings):
-                        clean_text = texts_to_embed_list[i]
-                        for original_index in clean_texts_map[clean_text]:
-                            embeddings[original_index] = embedding
+                    embedding_idx = 0
+                    for clean_text, original_indices in clean_texts_map.items():
+                        if any(embeddings[idx] is None for idx in original_indices):
+                            if embedding_idx < len(new_embeddings_vectors):
+                                vector = new_embeddings_vectors[embedding_idx]
+                                embedding_obj = Embedding(vector=vector)
+                                for original_index in original_indices:
+                                    if embeddings[original_index] is None:
+                                        embeddings[original_index] = embedding_obj
+                                embedding_idx += 1
+                            else:
+                                logger.error("Índice de embedding fora dos limites, inconsistência.")
+                                # Lidar com erro (ex: preencher com zero vector ou levantar exceção)
 
                     if cache_updated:
                         update_embedding_cache_metrics("size", len(self._cache))
@@ -315,15 +333,16 @@ class HuggingFaceEmbeddingProvider(EmbeddingProvider):
                     span.set_status(Status(StatusCode.ERROR, description=str(e)))
                     span.set_attribute("error.type", type(e).__name__)
                     zero_vec = [0.0] * self.settings.EMBEDDING_DIMENSION
-                    for text_to_embed in texts_to_embed_list:
-                        for original_index in clean_texts_map[text_to_embed]:
-                            if embeddings[original_index] is None:
-                                embeddings[original_index] = zero_vec
+                    zero_embedding = Embedding(vector=zero_vec)
+                    for i in range(len(embeddings)):
+                        if embeddings[i] is None:
+                            embeddings[i] = zero_embedding
 
-            final_embeddings: List[List[float]] = []
+            final_embeddings: List[Embedding] = []
             zero_vec = [0.0] * self.settings.EMBEDDING_DIMENSION
+            zero_embedding = Embedding(vector=zero_vec)
             for emb in embeddings:
-                final_embeddings.append(emb if emb is not None else zero_vec)
+                final_embeddings.append(emb if emb is not None else zero_embedding)
 
             hit_ratio = self._cache_hits / max(1, self._cache_hits + self._cache_misses)
             update_embedding_cache_metrics("hit_ratio", hit_ratio)
@@ -335,7 +354,7 @@ class HuggingFaceEmbeddingProvider(EmbeddingProvider):
                 span.set_attribute("cache.hit_ratio", hit_ratio)
                 span.set_attribute("duration_ms", int(elapsed_time * 1000))
                 if final_embeddings:
-                    span.set_attribute("vector.dimension", len(final_embeddings[0]))
+                    span.set_attribute("vector.dimension", len(final_embeddings[0].vector))
 
                 current_status = getattr(span, "status", None)
                 if (

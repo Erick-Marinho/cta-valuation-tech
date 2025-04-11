@@ -35,6 +35,7 @@ from application.interfaces.llm_provider import LLMProvider
 from domain.repositories.chunk_repository import ChunkRepository
 from domain.aggregates.document.chunk import Chunk # Importar entidade Chunk
 from application.interfaces.reranker import ReRanker # Importar interface ReRanker
+from domain.value_objects.embedding import Embedding # <-- Adicionar ou verificar import
 
 logger = logging.getLogger(__name__)
 
@@ -132,39 +133,48 @@ class RAGService:
                 # 2. Gerar embedding da consulta
                 with self.tracer.start_as_current_span("query_embedding.generate") as embed_span:
                     start_embed = time.time()
-                    query_embedding = await self._embedding_provider.embed_text(clean_query_text) # Usa provider injetado
+                    # Chamada retorna um objeto Embedding
+                    query_embedding_object: Embedding = await self._embedding_provider.embed_text(clean_query_text) # <-- MUDANÇA: Renomear variável
+
                     embed_span.set_attribute("duration_ms", int((time.time() - start_embed) * 1000))
-                    if query_embedding:
-                        embed_span.set_attribute("embedding.vector_length", len(query_embedding))
+
+                    # Acessar o vetor para validação e uso posterior
+                    query_embedding_vector = query_embedding_object.vector # <-- MUDANÇA: Extrair .vector
+
+                    if query_embedding_vector: # Verificar se o vetor não está vazio/nulo
+                        embed_span.set_attribute("embedding.vector_length", len(query_embedding_vector)) # <-- Usar o vetor
                     else:
                         embed_span.set_attribute("embedding.generation_failed", True)
-                        raise ValueError("Falha ao gerar embedding para a consulta.")
+                        # Considerar se a falha deve resultar em vetor zero ou levantar erro
+                        logger.error("Falha ao gerar embedding para a consulta (vetor vazio retornado).")
+                        # Você pode optar por retornar um erro aqui ou continuar com um vetor zero
+                        # Se continuar, certifique-se de que query_embedding_vector seja tratado adequadamente abaixo
+                        query_embedding_vector = [] # Ou [0.0] * dimensão_esperada se preferir
 
-                # 3. Recuperar chunks relevantes (USANDO BUSCA HÍBRIDA)
-                with self.tracer.start_as_current_span("document_retrieval.hybrid_search_rrf") as search_span: # Span renomeado/confirmado
-                    limit = max_results if max_results is not None else self.settings.MAX_RESULTS
-                    # Buscar MAIS resultados inicialmente para dar margem ao reranker
-                    initial_retrieval_limit = limit * 4 # Ex: 4x o limite final
-                    search_span.set_attribute("retrieval.initial_limit_for_rerank", initial_retrieval_limit)
+                    if not query_embedding_vector: # Checar novamente após possível fallback
+                         raise ValueError("Falha ao gerar embedding válido para a consulta.")
 
-                    logger.info(f"Executando self._chunk_repository.hybrid_search com limit={initial_retrieval_limit} para reranking")
-                    retrieved_results: List[Tuple[Chunk, float]] = await self._chunk_repository.hybrid_search(
-                        query_text=clean_query_text,
-                        embedding=query_embedding,
-                        limit=initial_retrieval_limit, # <-- Buscar mais
-                        document_ids=filtro_documentos,
-                        alpha=self.settings.VECTOR_SEARCH_WEIGHT
+                # 3. Busca Vetorial no Repositório de Chunks
+                with self.tracer.start_as_current_span("vector_search.find_similar") as search_span:
+                    start_search = time.time()
+                    search_span.set_attribute("vector.query_vector_length", len(query_embedding_vector)) # <-- Usar o vetor
+                    search_span.set_attribute("param.limit", limit)
+                    if filtro_documentos:
+                         search_span.set_attribute("param.filter_doc_ids", str(filtro_documentos))
+
+                    # O método find_similar_chunks provavelmente espera List[float]
+                    similar_chunks = await self._chunk_repository.find_similar_chunks(
+                        embedding_vector=query_embedding_vector, # <-- MUDANÇA: Passar o vetor numérico
+                        limit=limit,
+                        filter_document_ids=filtro_documentos,
                     )
-
-                    initial_hybrid_chunks = [chunk for chunk, score in retrieved_results]
-                    hybrid_scores = {chunk.id: score for chunk, score in retrieved_results if chunk.id}
-                    search_span.set_attribute("retrieval.hybrid_chunks_count", len(initial_hybrid_chunks))
-                # ----------------------------------------------------------
+                    search_span.set_attribute("duration_ms", int((time.time() - start_search) * 1000))
+                    search_span.set_attribute("result.chunks_found_count", len(similar_chunks))
 
                 # 4. Re-ranking (AGORA IMPLEMENTADO)
                 with self.tracer.start_as_current_span("document_processing.rerank") as rerank_span:
-                    rerank_span.set_attribute("reranking.input_chunks_count", len(initial_hybrid_chunks))
-                    reranked_chunks = await self._rerank_results(initial_hybrid_chunks, clean_query_text)
+                    rerank_span.set_attribute("reranking.input_chunks_count", len(similar_chunks))
+                    reranked_chunks = await self._rerank_results(similar_chunks, clean_query_text)
                     rerank_span.set_attribute("reranking.output_chunks_count", len(reranked_chunks))
                 # -----------------------------------------
 

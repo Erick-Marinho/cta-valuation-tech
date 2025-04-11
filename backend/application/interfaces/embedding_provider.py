@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import List
+from domain.value_objects.embedding import Embedding
 
 class EmbeddingProvider(ABC):
     """
@@ -10,7 +11,7 @@ class EmbeddingProvider(ABC):
     """
 
     @abstractmethod
-    async def embed_text(self, text: str) -> List[float]:
+    async def embed_text(self, text: str) -> Embedding:
         """
         Gera o embedding vetorial para um único texto.
 
@@ -18,7 +19,7 @@ class EmbeddingProvider(ABC):
             text: A string de texto a ser convertida em embedding.
 
         Returns:
-            O embedding gerado como uma lista de floats.
+            O embedding gerado como um objeto Embedding.
 
         Raises:
             Exception: Em caso de erro durante a geração do embedding.
@@ -26,7 +27,7 @@ class EmbeddingProvider(ABC):
         pass
 
     @abstractmethod
-    async def embed_batch(self, texts: List[str]) -> List[List[float]]:
+    async def embed_batch(self, texts: List[str]) -> List[Embedding]:
         """
         Gera embeddings vetoriais para uma lista de textos em lote.
 
@@ -34,7 +35,7 @@ class EmbeddingProvider(ABC):
             texts: Uma lista de strings de texto.
 
         Returns:
-            Uma lista de embeddings, onde cada embedding é uma lista de floats.
+            Uma lista de objetos Embedding.
             A ordem dos embeddings corresponde à ordem dos textos de entrada.
 
         Raises:

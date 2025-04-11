@@ -7,6 +7,7 @@ import hashlib # <-- Importar hashlib
 # Importar entidades do domínio
 from domain.aggregates.document.document import Document
 from domain.aggregates.document.chunk import Chunk
+from domain.value_objects.embedding import Embedding # Certifique-se que este import existe ou adicione
 
 # Importar interfaces de repositórios (Domínio)
 from domain.repositories.document_repository import DocumentRepository
@@ -154,51 +155,59 @@ class ProcessDocumentUseCase:
                 logger.debug(f"[DEBUG] Chunker retornou {len(page_chunks_data)} chunks para a página {page_num} (Doc ID: {document_id}).")
 
                 # Gerar embeddings para os chunks da página atual
-                page_chunk_embeddings: List[List[float]] = []
+                page_chunk_embeddings_vectors: List[List[float]] = []
                 chunk_texts_for_embedding: List[str] = [d.get("text", "") for d in page_chunks_data if d.get("text")]
 
                 if chunk_texts_for_embedding:
                     try:
-                        page_chunk_embeddings = await self._embedder.embed_batch(chunk_texts_for_embedding)
-                        if len(page_chunk_embeddings) != len(chunk_texts_for_embedding):
-                             logger.error(f"Número de embeddings ({len(page_chunk_embeddings)}) diferente do número de textos ({len(chunk_texts_for_embedding)}) para página {page_num}. Pulando página.")
-                             continue # Pula página se houver erro crítico no batch
+                        # Chamada retorna List[Embedding]
+                        page_chunk_embedding_objects: List[Embedding] = await self._embedder.embed_batch(chunk_texts_for_embedding) # <-- MUDANÇA: Renomear variável para clareza
+
+                        # Validar o número de embeddings retornados
+                        if len(page_chunk_embedding_objects) != len(chunk_texts_for_embedding):
+                             logger.error(f"Número de embeddings ({len(page_chunk_embedding_objects)}) diferente do número de textos ({len(chunk_texts_for_embedding)}) para página {page_num}. Pulando página.") # Log usa o tamanho da lista de objetos
+                             continue
+
+                        # Extrair os vetores numéricos para salvar/usar
+                        page_chunk_embeddings_vectors = [emb.vector for emb in page_chunk_embedding_objects] # <-- MUDANÇA: Extrair .vector
+
                     except Exception as embed_err:
                         logger.error(f"Erro ao gerar embeddings para chunks da página {page_num} (Doc ID: {document_id}): {embed_err}", exc_info=True)
-                        continue # Pula para a próxima página
-
-                # Criar entidades Chunk (sem embedding) e preparar tuplas para salvar
-                embedding_idx = 0
-                for i, chunk_data in enumerate(page_chunks_data):
-                    chunk_text = chunk_data.get("text", "")
-                    chunk_metadata = chunk_data.get("metadata", {})
-                    if "page_number" not in chunk_metadata:
-                        chunk_metadata["page_number"] = page_num
-                    chunk_page_num = chunk_metadata.get("page_number")
-
-                    if not chunk_text: continue # Pula chunk vazio
-
-                    # Tenta obter o embedding correspondente
-                    current_embedding = []
-                    if embedding_idx < len(page_chunk_embeddings):
-                        current_embedding = page_chunk_embeddings[embedding_idx]; embedding_idx += 1
-                    else:
-                        # Isso não deveria acontecer se a verificação anterior passou, mas por segurança:
-                        logger.error(f"Faltando embedding inesperadamente para chunk {i}, pág {chunk_page_num}, doc {document_id}. Pulando chunk.")
                         continue
 
-                    total_chunks_attempted += 1 # Incrementa contador de chunks tentados
+                    # Agora, use 'page_chunk_embeddings_vectors' onde antes usava o resultado direto de embed_batch
+                    embedding_idx = 0
+                    for i, chunk_data in enumerate(page_chunks_data):
+                        chunk_text = chunk_data.get("text", "")
+                        chunk_metadata = chunk_data.get("metadata", {})
+                        if "page_number" not in chunk_metadata:
+                            chunk_metadata["page_number"] = page_num
+                        chunk_page_num = chunk_metadata.get("page_number")
 
-                    # Criar entidade Chunk SEM o embedding
-                    domain_chunk = Chunk(
-                        document_id=document_id,
-                        text=chunk_text,
-                        page_number=chunk_page_num,
-                        position=total_chunks_attempted - 1, # Usar contador como posição global (ou ajustar se necessário)
-                        metadata=chunk_metadata
-                    )
-                    # Adicionar tupla (Chunk, embedding) à lista para salvar
-                    chunks_to_save.append((domain_chunk, current_embedding))
+                        if not chunk_text: continue # Pula chunk vazio
+
+                        # Tenta obter o embedding correspondente
+                        current_embedding = []
+                        if embedding_idx < len(page_chunk_embeddings_vectors): # <-- Usar a lista de vetores
+                            current_embedding = page_chunk_embeddings_vectors[embedding_idx] # <-- Usar a lista de vetores
+                            embedding_idx += 1
+                        else:
+                            # Isso não deveria acontecer se a verificação anterior passou, mas por segurança:
+                            logger.error(f"Faltando embedding inesperadamente para chunk {i}, pág {chunk_page_num}, doc {document_id}. Pulando chunk.")
+                            continue
+
+                        total_chunks_attempted += 1 # Incrementa contador de chunks tentados
+
+                        # Criar entidade Chunk SEM o embedding
+                        domain_chunk = Chunk(
+                            document_id=document_id,
+                            text=chunk_text,
+                            page_number=chunk_page_num,
+                            position=total_chunks_attempted - 1, # Usar contador como posição global (ou ajustar se necessário)
+                            metadata=chunk_metadata
+                        )
+                        # Adicionar tupla (Chunk, embedding) à lista para salvar
+                        chunks_to_save.append((domain_chunk, current_embedding))
 
             # ----- FIM DO LOOP -----
 

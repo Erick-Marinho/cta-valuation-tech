@@ -8,6 +8,7 @@ import time
 from application.interfaces.embedding_provider import EmbeddingProvider as AppEmbeddingProvider # Alias para evitar conflito
 # from backend.infrastructure.external_services.embedding.huggingface_embedding_provider import HuggingFaceEmbeddingProvider # Para type hint
 from infrastructure.external_services.embedding.huggingface_embedding_provider import HuggingFaceEmbeddingProvider
+from domain.value_objects.embedding import Embedding # <-- Adicionar ou verificar import
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +44,10 @@ class LangChainHuggingFaceEmbeddings(Embeddings):
             asyncio.set_event_loop(loop)
             
             try:
-                result = loop.run_until_complete(self.provider.embed_batch(texts))
+                embedding_objects: List[Embedding] = loop.run_until_complete(self.provider.embed_batch(texts))
+                embedding_vectors: List[List[float]] = [emb.vector for emb in embedding_objects]
                 logger.debug(f"embed_documents (sync) concluído em {time.time() - start_time:.2f}s")
-                return result
+                return embedding_vectors
             finally:
                 loop.close()
                 
@@ -71,9 +73,10 @@ class LangChainHuggingFaceEmbeddings(Embeddings):
             asyncio.set_event_loop(loop)
             
             try:
-                result = loop.run_until_complete(self.provider.embed_text(text))
+                embedding_object: Embedding = loop.run_until_complete(self.provider.embed_text(text))
+                embedding_vector: List[float] = embedding_object.vector
                 logger.debug(f"embed_query (sync) concluído em {time.time() - start_time:.2f}s")
-                return result
+                return embedding_vector
             finally:
                 loop.close()
                 
