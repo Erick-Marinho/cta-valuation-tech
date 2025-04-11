@@ -23,6 +23,7 @@ from interface.api.dependencies import validate_api_key, verify_db_health, commo
 from application.use_cases.document_processing.process_document import ProcessDocumentUseCase, DocumentProcessingError
 from application.use_cases.document_processing.get_document_details import GetDocumentDetailsUseCase
 from application.use_cases.document_processing.delete_document import DeleteDocumentUseCase
+from application.dtos.document_dto import DocumentDTO
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +34,12 @@ class DocumentResponse(BaseModel):
 
     id: int
     name: str
-    file_type: str
-    upload_date: str
-    size_kb: float
-    chunks_count: int
-    processed: bool
-    metadata: Dict[str, Any]
+    file_type: Optional[str]
+    upload_date: Optional[str]
+    size_kb: Optional[float]
+    chunks_count: Optional[int]
+    processed: Optional[bool]
+    metadata: Optional[Dict[str, Any]]
 
 
 class DocumentListResponse(BaseModel):
@@ -87,61 +88,45 @@ async def list_documents(
         sort_by = params["sort_by"]
         order = params["order"]
 
-        # CHAMAR O CASO DE USO E DESEMPACOTAR A TUPLA
-        # documents_page: Lista de documentos da página atual
-        # total_documents: Contagem total de documentos no DB (sem filtros aplicados ainda aqui)
-        documents_page, total_documents = await list_docs_use_case.execute(limit=limit, offset=offset)
+        document_dtos_page, total_documents = await list_docs_use_case.execute(limit=limit, offset=offset)
 
-        # TODO: Mover filtragem por nome e ordenação para o Caso de Uso/Repositório.
-        # --- Lógica de filtragem/ordenação mantida temporariamente na API ---
-        # NOTA: Se aplicarmos o filtro *depois* da busca paginada, o 'total_documents'
-        # retornado pelo use case (que não sabe do filtro ainda) ficará INCORRETO
-        # em relação à lista filtrada. A solução ideal é passar o filtro para o use case/repo.
-        # Por enquanto, manteremos assim, cientes da imprecisão do 'total' quando há filtro.
         if name_filter:
             filtered_documents_page = [
-                doc for doc in documents_page if name_filter.lower() in doc.name.lower()
+                dto for dto in document_dtos_page if name_filter.lower() in dto.name.lower()
             ]
-            # !! O total_documents ainda reflete o total *antes* do filtro de nome
-            # !! A paginação também foi feita antes do filtro. Isso está subótimo.
         else:
-            filtered_documents_page = documents_page
+            filtered_documents_page = document_dtos_page
 
-        # Aplicar ordenação na página retornada/filtrada (temporário)
         reverse_sort = order == "desc"
         if sort_by == "name":
             filtered_documents_page.sort(key=lambda x: x.name, reverse=reverse_sort)
         elif sort_by == "upload_date":
-            filtered_documents_page.sort(key=lambda x: x.upload_date, reverse=reverse_sort)
+            filtered_documents_page.sort(key=lambda x: x.upload_date or datetime.datetime.min, reverse=reverse_sort)
         elif sort_by == "size_kb":
-            filtered_documents_page.sort(key=lambda x: x.size_kb, reverse=reverse_sort)
-        # --- Fim da lógica temporária ---
+            filtered_documents_page.sort(key=lambda x: x.size_kb or 0.0, reverse=reverse_sort)
 
-        # Converter a lista final (página filtrada/ordenada) para o formato de resposta
         document_responses = [
             DocumentResponse(
-                id=doc.id,
-                name=doc.name,
-                file_type=doc.file_type,
-                upload_date=doc.upload_date.isoformat(),
-                size_kb=doc.size_kb,
-                chunks_count=doc.chunks_count,
-                processed=doc.processed,
-                metadata=doc.metadata,
+                id=dto.id,
+                name=dto.name,
+                file_type=dto.file_type,
+                upload_date=dto.upload_date.isoformat() if dto.upload_date else None,
+                size_kb=dto.size_kb,
+                chunks_count=dto.chunks_count,
+                processed=dto.processed,
+                metadata=dto.metadata,
             )
-            for doc in filtered_documents_page
+            for dto in filtered_documents_page
         ]
 
-        # USAR O total_documents RETORNADO PELO CASO DE USO
         return DocumentListResponse(
             documents=document_responses,
-            total=total_documents, # <-- Usar o total real (antes do filtro de nome aplicado aqui)
+            total=total_documents,
             limit=limit,
             offset=offset,
         )
 
     except RuntimeError as rte:
-         # Capturar erro específico de pool não disponível, por exemplo
          logger.error(f"Erro de configuração/runtime: {rte}")
          raise HTTPException(
              status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -230,23 +215,23 @@ async def get_document(
 ):
     """ Obtém informações detalhadas sobre um documento específico. """
     try:
-        document = await get_details_use_case.execute(document_id)
+        document_dto = await get_details_use_case.execute(document_id)
 
-        if document is None:
+        if document_dto is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Documento com ID {document_id} não encontrado.",
             )
 
         return DocumentResponse(
-            id=document.id,
-            name=document.name,
-            file_type=document.file_type,
-            upload_date=document.upload_date.isoformat(),
-            size_kb=document.size_kb,
-            chunks_count=document.chunks_count,
-            processed=document.processed,
-            metadata=document.metadata,
+            id=document_dto.id,
+            name=document_dto.name,
+            file_type=document_dto.file_type,
+            upload_date=document_dto.upload_date.isoformat() if document_dto.upload_date else None,
+            size_kb=document_dto.size_kb,
+            chunks_count=document_dto.chunks_count,
+            processed=document_dto.processed,
+            metadata=document_dto.metadata,
         )
 
     except HTTPException:

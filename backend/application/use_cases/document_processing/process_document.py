@@ -1,6 +1,6 @@
 import logging
 import time # Para métricas de tempo
-from typing import Dict, Any, Optional, List # Adicionar List
+from typing import Dict, Any, Optional, List, Tuple # Adicionar Tuple
 import re # <-- Adicionar import re
 import hashlib # <-- Importar hashlib
 
@@ -14,7 +14,7 @@ from domain.repositories.chunk_repository import ChunkRepository
 
 # Importar interfaces de serviços externos (Aplicação)
 from application.interfaces.text_extractor import TextExtractor
-from application.interfaces.chunker import Chunker, ChunkQualityEvaluator
+from application.interfaces.chunker import Chunker
 from application.interfaces.embedding_provider import EmbeddingProvider
 
 # Importar configurações (pode ser necessário para defaults)
@@ -49,14 +49,12 @@ class ProcessDocumentUseCase:
         text_extractor: TextExtractor,
         chunker: Chunker,
         embedding_provider: EmbeddingProvider,
-        chunk_evaluator: Optional[ChunkQualityEvaluator] = None,
     ):
         self._doc_repo = document_repository
         self._chunk_repo = chunk_repository
         self._extractor = text_extractor
         self._chunker = chunker
         self._embedder = embedding_provider
-        self._evaluator = chunk_evaluator
         self._settings = get_settings()
 
     async def execute(
@@ -127,8 +125,9 @@ class ProcessDocumentUseCase:
                 raise DocumentProcessingError(f"Erro na extração de texto: {e}") from e
 
             # ----- INÍCIO DO LOOP DE PROCESSAMENTO DE PÁGINAS E CHUNKS -----
-            all_domain_chunks: List[Chunk] = []
-            total_chunks_created = 0
+            chunks_to_save: List[Tuple[Chunk, List[float]]] = []
+            total_chunks_attempted = 0 # Renomeado para clareza
+
             for page_data in pages_data:
                 page_num = page_data.get("page_number")
                 page_text_raw = page_data.get("text", "")
@@ -154,18 +153,21 @@ class ProcessDocumentUseCase:
 
                 logger.debug(f"[DEBUG] Chunker retornou {len(page_chunks_data)} chunks para a página {page_num} (Doc ID: {document_id}).")
 
+                # Gerar embeddings para os chunks da página atual
                 page_chunk_embeddings: List[List[float]] = []
                 chunk_texts_for_embedding: List[str] = [d.get("text", "") for d in page_chunks_data if d.get("text")]
 
                 if chunk_texts_for_embedding:
-                    try: # Try para embedding da página
+                    try:
                         page_chunk_embeddings = await self._embedder.embed_batch(chunk_texts_for_embedding)
                         if len(page_chunk_embeddings) != len(chunk_texts_for_embedding):
-                            raise DocumentProcessingError(f"Embeddings x Textos não batem para página {page_num}.")
+                             logger.error(f"Número de embeddings ({len(page_chunk_embeddings)}) diferente do número de textos ({len(chunk_texts_for_embedding)}) para página {page_num}. Pulando página.")
+                             continue # Pula página se houver erro crítico no batch
                     except Exception as embed_err:
                         logger.error(f"Erro ao gerar embeddings para chunks da página {page_num} (Doc ID: {document_id}): {embed_err}", exc_info=True)
                         continue # Pula para a próxima página
 
+                # Criar entidades Chunk (sem embedding) e preparar tuplas para salvar
                 embedding_idx = 0
                 for i, chunk_data in enumerate(page_chunks_data):
                     chunk_text = chunk_data.get("text", "")
@@ -173,40 +175,55 @@ class ProcessDocumentUseCase:
                     if "page_number" not in chunk_metadata:
                         chunk_metadata["page_number"] = page_num
                     chunk_page_num = chunk_metadata.get("page_number")
+
                     if not chunk_text: continue # Pula chunk vazio
+
+                    # Tenta obter o embedding correspondente
                     current_embedding = []
                     if embedding_idx < len(page_chunk_embeddings):
                         current_embedding = page_chunk_embeddings[embedding_idx]; embedding_idx += 1
                     else:
-                        logger.error(f"Faltando embedding para chunk {i}, pág {chunk_page_num}, doc {document_id}. Pulando chunk.")
+                        # Isso não deveria acontecer se a verificação anterior passou, mas por segurança:
+                        logger.error(f"Faltando embedding inesperadamente para chunk {i}, pág {chunk_page_num}, doc {document_id}. Pulando chunk.")
                         continue
+
+                    total_chunks_attempted += 1 # Incrementa contador de chunks tentados
+
+                    # Criar entidade Chunk SEM o embedding
                     domain_chunk = Chunk(
-                        document_id=document_id, text=chunk_text, embedding=current_embedding,
-                        page_number=chunk_page_num, position=total_chunks_created, metadata=chunk_metadata
+                        document_id=document_id,
+                        text=chunk_text,
+                        page_number=chunk_page_num,
+                        position=total_chunks_attempted - 1, # Usar contador como posição global (ou ajustar se necessário)
+                        metadata=chunk_metadata
                     )
-                    all_domain_chunks.append(domain_chunk)
-                    total_chunks_created += 1
+                    # Adicionar tupla (Chunk, embedding) à lista para salvar
+                    chunks_to_save.append((domain_chunk, current_embedding))
+
             # ----- FIM DO LOOP -----
 
-            logger.info(f"Total de {total_chunks_created} domain chunks criados para doc ID {document_id}.")
+            logger.info(f"Total de {len(chunks_to_save)} chunks preparados para salvar para doc ID {document_id}.")
 
             # 6. Salvar chunks em lote (DENTRO do try principal)
             num_chunks_saved = 0
-            if all_domain_chunks:
-                try: # Try interno para salvar chunks
-                    saved_chunk_results = await self._chunk_repo.save_batch(all_domain_chunks)
-                    num_chunks_saved = len(saved_chunk_results) if isinstance(saved_chunk_results, list) else (saved_chunk_results if isinstance(saved_chunk_results, int) else len(all_domain_chunks))
-                    logger.info(f"{num_chunks_saved} chunks salvos no DB para documento {document_id}")
-                except Exception as e: # Captura erro do save_batch
-                    logger.exception(f"Falha ao salvar chunks em lote para documento {document_id}: {e}")
-                    raise DocumentProcessingError(f"Erro ao salvar chunks: {e}") from e # Relança para except principal
-            else:
-                logger.warning(f"Nenhum chunk foi gerado para salvar para doc ID {document_id}.")
+            if chunks_to_save: # <-- Usar a nova lista de tuplas
+                try:
+                    # Chamar save_batch com a lista de tuplas
+                    saved_domain_chunks: List[Chunk] = await self._chunk_repo.save_batch(chunks_to_save)
 
-            # 7. Atualizar entidade Document final (DENTRO do try principal)
-            document.chunks_count = num_chunks_saved
+                    # A contagem de sucesso é o número de chunks retornados pelo save_batch
+                    num_chunks_saved = len(saved_domain_chunks)
+                    logger.info(f"{num_chunks_saved} chunks salvos no DB para documento {document_id}")
+                except Exception as e:
+                    logger.exception(f"Falha ao salvar chunks em lote para documento {document_id}: {e}")
+                    raise DocumentProcessingError(f"Erro ao salvar chunks: {e}") from e
+            else:
+                logger.warning(f"Nenhum chunk foi gerado/preparado para salvar para doc ID {document_id}.")
+
+            # 7. Atualizar entidade Document final (usar num_chunks_saved)
+            document.chunks_count = num_chunks_saved # <-- Usar a contagem retornada
             document.processed = num_chunks_saved > 0
-            document.metadata["page_count"] = len(pages_data)
+            document.metadata["page_count"] = len(pages_data) # Mantém contagem de páginas
             document.size_kb = original_size_kb
             document.metadata["processing_status"] = "success"
             document.metadata.pop("processing_error", None)

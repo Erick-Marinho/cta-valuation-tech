@@ -17,6 +17,7 @@ from utils.metrics_prometheus import (
 from opentelemetry.trace import SpanKind, Status, StatusCode
 from application.interfaces.embedding_provider import EmbeddingProvider
 import asyncio
+from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,10 @@ class HuggingFaceEmbeddingProvider(EmbeddingProvider):
     - Implementar cache para embeddings frequentes
     - Fornecer métricas e logging
     """
+
+    _model: SentenceTransformer = None
+    _model_name: str = ""
+    _device: str = ""
 
     def __init__(self):
         """
@@ -61,32 +66,43 @@ class HuggingFaceEmbeddingProvider(EmbeddingProvider):
             "embedding_service.initialize_model", kind=SpanKind.INTERNAL
         ) as span:
             try:
-                model_name = self.settings.EMBEDDING_MODEL
-                device = "cpu"
-                span.set_attribute("model.device", device)
-                span.set_attribute("model.name", model_name)
+                if HuggingFaceEmbeddingProvider._model is None:
+                    HuggingFaceEmbeddingProvider._model_name = self.settings.EMBEDDING_MODEL
+                    HuggingFaceEmbeddingProvider._device = 'cuda' if self.settings.USE_GPU else 'cpu'
 
-                logger.info(
-                    f"Inicializando modelo de embeddings: {model_name} no dispositivo: {device}"
-                )
+                    span.set_attribute("embedding.model_name", HuggingFaceEmbeddingProvider._model_name)
+                    span.set_attribute("embedding.device", HuggingFaceEmbeddingProvider._device)
+                    logger.info(f"Carregando modelo SentenceTransformer: {HuggingFaceEmbeddingProvider._model_name} no dispositivo: {HuggingFaceEmbeddingProvider._device}")
+                    try:
+                        start_load = time.time()
+                        HuggingFaceEmbeddingProvider._model = SentenceTransformer(
+                            HuggingFaceEmbeddingProvider._model_name, device=HuggingFaceEmbeddingProvider._device
+                        )
+                        load_time = time.time() - start_load
+                        logger.info(f"Modelo SentenceTransformer '{HuggingFaceEmbeddingProvider._model_name}' carregado em {load_time:.2f}s.")
+                        span.set_attribute("embedding.load_time_ms", int(load_time * 1000))
+                        span.set_status(Status(StatusCode.OK))
+                    except Exception as e:
+                        logger.error(f"Falha ao carregar modelo SentenceTransformer '{HuggingFaceEmbeddingProvider._model_name}': {e}", exc_info=True)
+                        span.record_exception(e)
+                        span.set_status(Status(StatusCode.ERROR, description=str(e)))
+                        raise RuntimeError(f"Falha ao inicializar HuggingFaceEmbeddingProvider: {e}") from e
+                else:
+                    logger.info(f"Reutilizando modelo SentenceTransformer já carregado: {HuggingFaceEmbeddingProvider._model_name}")
+                    span.set_attribute("embedding.model_name", HuggingFaceEmbeddingProvider._model_name)
+                    span.set_attribute("embedding.device", HuggingFaceEmbeddingProvider._device)
+                    span.set_status(Status(StatusCode.OK, "Modelo reutilizado."))
 
-                model_init_start = time.time()
-                self.model = HuggingFaceEmbeddings(
-                    model_name=model_name,
-                    model_kwargs={"device": device},
-                    encode_kwargs={"normalize_embeddings": True},
-                )
-                model_init_duration = time.time() - model_init_start
-                span.set_attribute(
-                    "model.initialization_time_ms", int(model_init_duration * 1000)
-                )
+                self.model = HuggingFaceEmbeddingProvider._model
+                self.model_name = HuggingFaceEmbeddingProvider._model_name
+                self.device = HuggingFaceEmbeddingProvider._device
 
                 test_text = "verificação de dimensão"
                 with self.tracer.start_as_current_span(
                     "embedding_service.initialize_model.dimension_check"
                 ) as check_span:
-                    test_embedding = self.model.embed_query(test_text)
-                    embedding_dim = len(test_embedding)
+                    test_embedding = self.model.encode([test_text], convert_to_numpy=True, show_progress_bar=False)
+                    embedding_dim = len(test_embedding[0])
                     check_span.set_attribute("embedding.dimension", embedding_dim)
 
                 span.set_attribute("model.dimension", embedding_dim)
@@ -99,13 +115,13 @@ class HuggingFaceEmbeddingProvider(EmbeddingProvider):
                     span.set_attribute("model.dimension_mismatch", True)
 
                 logger.info(
-                    f"Modelo de embeddings '{model_name}' inicializado. Dimensão: {embedding_dim}. Tempo: {model_init_duration:.2f}s"
+                    f"Modelo de embeddings '{HuggingFaceEmbeddingProvider._model_name}' inicializado. Dimensão: {embedding_dim}. Tempo: {load_time:.2f}s"
                 )
                 span.set_status(Status(StatusCode.OK))
 
             except Exception as e:
                 logger.error(
-                    f"Falha crítica ao inicializar modelo de embeddings '{model_name}': {e}",
+                    f"Falha crítica ao inicializar modelo de embeddings '{HuggingFaceEmbeddingProvider._model_name}': {e}",
                     exc_info=True,
                 )
                 span.record_exception(e)
@@ -172,31 +188,20 @@ class HuggingFaceEmbeddingProvider(EmbeddingProvider):
             span.set_attribute("cache.hit_ratio", hit_ratio)
 
             try:
-                embedding = await asyncio.to_thread(self.model.embed_query, clean_text)
-
-                self._total_embeddings += 1
-
-                if len(self._cache) < 10000:
-                    self._cache[cache_key] = embedding
-                    update_embedding_cache_metrics("size", len(self._cache))
-                    span.set_attribute("cache.updated", True)
+                embeddings = await self.embed_batch([text])
+                if embeddings and len(embeddings) == 1:
+                    span.set_attribute("embedding.vector_length", len(embeddings[0]))
+                    span.set_status(Status(StatusCode.OK))
+                    return embeddings[0]
                 else:
-                    span.set_attribute("cache.full", True)
-
-                elapsed_time = time.time() - start_time
-                record_embedding_time(elapsed_time, operation_type="single")
-                span.set_attribute("duration_ms", int(elapsed_time * 1000))
-                span.set_attribute("vector.dimension", len(embedding))
-                span.set_status(Status(StatusCode.OK))
-                return embedding
+                    logger.error(f"embed_batch não retornou o resultado esperado para texto único: {text[:100]}...")
+                    span.set_status(Status(StatusCode.ERROR, "Resultado inesperado de embed_batch"))
+                    return [0.0] * self.settings.EMBEDDING_DIMENSION
 
             except Exception as e:
                 elapsed_time = time.time() - start_time
                 record_embedding_time(elapsed_time, operation_type="single")
-                logger.error(
-                    f"Erro ao gerar embedding para texto: '{clean_text[:50]}...': {e}",
-                    exc_info=True,
-                )
+                logger.exception(f"Erro ao gerar embedding para texto único: {e}")
                 span.record_exception(e)
                 span.set_status(Status(StatusCode.ERROR, description=str(e)))
                 span.set_attribute("error.type", type(e).__name__)
@@ -272,9 +277,10 @@ class HuggingFaceEmbeddingProvider(EmbeddingProvider):
 
                 try:
                     def sync_embed_documents():
-                        return self.model.embed_documents(texts_to_embed_list)
+                        return self.model.encode(texts_to_embed_list, convert_to_numpy=True, show_progress_bar=False)
 
-                    new_embeddings = await asyncio.to_thread(sync_embed_documents)
+                    new_embeddings_np = await asyncio.to_thread(sync_embed_documents)
+                    new_embeddings = [embedding.tolist() for embedding in new_embeddings_np]
 
                     self._total_embeddings += uncached_count
 

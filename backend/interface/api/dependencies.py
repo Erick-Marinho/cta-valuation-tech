@@ -17,7 +17,7 @@ from domain.repositories.chunk_repository import ChunkRepository
 from application.use_cases.document_processing.list_documents import ListDocumentsUseCase
 from application.use_cases.document_processing.process_document import ProcessDocumentUseCase
 from application.interfaces.text_extractor import TextExtractor
-from application.interfaces.chunker import Chunker, ChunkQualityEvaluator
+from application.interfaces.chunker import Chunker
 from application.interfaces.embedding_provider import EmbeddingProvider
 from application.interfaces.llm_provider import LLMProvider
 # Importar a implementação concreta do repositório (baseada em asyncpg)
@@ -29,8 +29,7 @@ from application.use_cases.document_processing.delete_document import DeleteDocu
 
 # --- Importar implementações de SERVIÇOS ---
 from infrastructure.processors.extractors.pdf_text_extractor import PdfTextExtractor
-from infrastructure.processors.chunkers.langchain_chunker import LangchainChunker
-from infrastructure.evaluation.chunk_evaluator import BasicChunkQualityEvaluator
+from infrastructure.processors.chunkers.sentence_chunker import SentenceChunker
 from infrastructure.external_services.embedding.huggingface_embedding_provider import HuggingFaceEmbeddingProvider
 from infrastructure.llm.providers.nvidia_provider import NvidiaProvider
 
@@ -86,19 +85,15 @@ def get_text_extractor() -> TextExtractor:
     return PdfTextExtractor()
 
 def get_chunker() -> Chunker:
-    return LangchainChunker()
+    """ Fornece a implementação do Chunker baseada em sentenças. """
+    # Nota: Poderíamos passar argumentos (chunk_size, overlap_sentences) aqui se necessário
+    # pegando-os das settings ou de outro lugar, mas por enquanto usa os defaults/settings internos.
+    return SentenceChunker()
 
 @lru_cache()
 def get_embedding_provider() -> EmbeddingProvider:
     logger.info("Criando instância singleton do HuggingFaceEmbeddingProvider...")
     return HuggingFaceEmbeddingProvider()
-
-def get_chunk_quality_evaluator() -> Optional[ChunkQualityEvaluator]:
-    try:
-        return BasicChunkQualityEvaluator()
-    except Exception as e:
-        logger.warning(f"Não foi possível criar BasicChunkQualityEvaluator: {e}. Avaliação desabilitada.")
-        return None
 
 @lru_cache()
 def get_llm_provider() -> LLMProvider:
@@ -126,7 +121,6 @@ def get_process_document_use_case(
     extractor: Annotated[TextExtractor, Depends(get_text_extractor)],
     chunker: Annotated[Chunker, Depends(get_chunker)],
     embedder: Annotated[EmbeddingProvider, Depends(get_embedding_provider)],
-    evaluator: Annotated[Optional[ChunkQualityEvaluator], Depends(get_chunk_quality_evaluator)]
 ) -> ProcessDocumentUseCase:
     return ProcessDocumentUseCase(
         document_repository=doc_repo,
@@ -134,7 +128,6 @@ def get_process_document_use_case(
         text_extractor=extractor,
         chunker=chunker,
         embedding_provider=embedder,
-        chunk_evaluator=evaluator
     )
 
 def get_get_document_details_use_case(

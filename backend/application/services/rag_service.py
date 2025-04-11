@@ -247,18 +247,31 @@ class RAGService:
                 }
 
                 if include_debug_info:
+                    # --- MODIFICAÇÃO AQUI ---
+                    # Incluir o texto do chunk em final_chunk_details
+                    final_chunk_details_list = []
+                    for rank, c in enumerate(final_chunks):
+                        chunk_detail = {
+                            "id": c.id,
+                            "doc_id": c.document_id,
+                            "page": c.page_number,
+                            "pos": c.position,
+                            "text_content": c.text, # <-- ADICIONADO CAMPO COM TEXTO
+                            "score_rrf": hybrid_scores.get(c.id), # Score original antes do rerank
+                            "final_rank": rank + 1 # Rank após rerank
+                        }
+                        final_chunk_details_list.append(chunk_detail)
+                    # --- FIM DA MODIFICAÇÃO ---
+
                     debug_info = {
                         "query": query,
                         "clean_query": clean_query_text,
-                        "num_results": len(final_chunks), # Número final de chunks usados
+                        "num_results": len(final_chunks),
                         "retrieved_chunk_ids_after_rerank": [c.id for c in final_chunks],
                         "retrieved_scores_rrf_original": {c.id: hybrid_scores.get(c.id) for c in final_chunks},
                         "context_used_length": len(context),
                         "context_used_tokens": context_tokens,
-                        "final_chunk_details": [
-                            {"id": c.id, "doc_id": c.document_id, "page": c.page_number, "pos": c.position, "score_rrf": hybrid_scores.get(c.id), "final_rank": rank+1}
-                            for rank, c in enumerate(final_chunks)
-                         ]
+                        "final_chunk_details": final_chunk_details_list # <-- Usar a lista criada
                     }
                     result["debug_info"] = debug_info
 

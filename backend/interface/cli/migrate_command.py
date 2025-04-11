@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 from domain.repositories.document_repository import DocumentRepository
 from domain.repositories.chunk_repository import ChunkRepository
 from application.interfaces.text_extractor import TextExtractor
-from application.interfaces.chunker import Chunker, ChunkQualityEvaluator
+from application.interfaces.chunker import Chunker
 from application.interfaces.embedding_provider import EmbeddingProvider
 # from application.interfaces.reranker import ReRanker # Não usado na migração
 # from application.interfaces.llm_provider import LLMProvider # Não usado na migração
@@ -30,8 +30,8 @@ from application.interfaces.embedding_provider import EmbeddingProvider
 from infrastructure.persistence.sqlmodel.repositories.sm_document_repository import SqlModelDocumentRepository
 from infrastructure.persistence.sqlmodel.repositories.sm_chunk_repository import SqlModelChunkRepository
 from infrastructure.processors.extractors.pdf_text_extractor import PdfTextExtractor
-from infrastructure.processors.chunkers.langchain_chunker import LangchainChunker # Ou SimpleChunker
-from infrastructure.evaluation.chunk_evaluator import BasicChunkQualityEvaluator # Ou None
+from infrastructure.processors.chunkers.sentence_chunker import SentenceChunker
+# from infrastructure.evaluation.chunk_evaluator import BasicChunkQualityEvaluator # Ou None
 from infrastructure.external_services.embedding.huggingface_embedding_provider import HuggingFaceEmbeddingProvider
 # from infrastructure.reranking.cross_encoder_reranker import CrossEncoderReRanker # Não usado na migração
 # from infrastructure.llm.providers.nvidia_provider import NvidiaProvider # Não usado na migração
@@ -77,9 +77,8 @@ async def create_dependencies_for_migration(settings: Settings, session: AsyncSe
         try:
             # Instanciar providers
             embedding_provider = get_cached_provider("embedding", HuggingFaceEmbeddingProvider)
-            text_extractor = PdfTextExtractor() # Instancia direta aqui, sem cache por enquanto
-            chunker = LangchainChunker() # Instancia direta
-            evaluator = BasicChunkQualityEvaluator() # Instancia direta
+            text_extractor = PdfTextExtractor()
+            chunker = SentenceChunker()
 
             # Instanciar repositórios
             doc_repo = SqlModelDocumentRepository(session=session)
@@ -92,7 +91,6 @@ async def create_dependencies_for_migration(settings: Settings, session: AsyncSe
                 text_extractor=text_extractor,
                 chunker=chunker,
                 embedding_provider=embedding_provider,
-                chunk_evaluator=evaluator
             )
             span.set_status(Status(StatusCode.OK))
             return {"process_doc_use_case": process_doc_use_case}

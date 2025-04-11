@@ -171,131 +171,75 @@ async def prepare_evaluation_data(rag_service: RAGService) -> Dataset:
 
         logger.info(f"Processando item {i+1}/{total_items}: '{question[:60]}...'")
 
-        answer = "ERRO: Falha na execução do RAGService"  # Default em caso de erro
-        contexts = []  # Default: Lista de strings dos contextos recuperados/usados
+        answer = "ERRO: Falha na execução do RAGService"
+        contexts = [] # Lista de strings dos contextos recuperados/usados
 
         try:
-            # Chama o RAGService para obter resposta e debug info
             start_query_time = asyncio.get_event_loop().time()
             result = await rag_service.process_query(
                 query=question, include_debug_info=True
             )
             query_duration = asyncio.get_event_loop().time() - start_query_time
-            logger.info(
-                f"Item {i+1} processado pelo RAGService em {query_duration:.2f}s."
-            )
+            logger.info(f"Item {i+1} processado pelo RAGService em {query_duration:.2f}s.")
 
             answer = result.get("response", "")
             debug_info = result.get("debug_info", {})
 
-            # --- Extração de Contexto (CRÍTICO PARA RAGAS) ---
+            # --- EXTRAÇÃO DE CONTEXTO (SIMPLIFICADA) ---
             final_chunk_details = debug_info.get("final_chunk_details", [])
-            placeholders_detected = False
+            placeholders_used = False
 
-            # Verificar se temos acesso direto ao texto_content dos chunks
-            if final_chunk_details and isinstance(final_chunk_details[0], dict):
-                # Tentar extrair o texto dos chunks com várias estratégias
-                if "text_content" in final_chunk_details[0]:
-                    # Caso ideal: temos o texto diretamente
-                    contexts = [details.get("text_content", "") for details in final_chunk_details]
-                    logger.debug(f"Contextos obtidos de 'final_chunk_details[text_content]' para item {i+1}.")
-                elif "content" in final_chunk_details[0]:
-                    # Alternativa: às vezes o campo é 'content'
-                    contexts = [details.get("content", "") for details in final_chunk_details]
-                    logger.debug(f"Contextos obtidos de 'final_chunk_details[content]' para item {i+1}.")
-                elif "id" in final_chunk_details[0]:
-                    # Se temos apenas IDs, podemos tentar recuperar o texto diretamente do banco
-                    try:
-                        chunk_ids = [details.get("id") for details in final_chunk_details if details.get("id")]
-                        if chunk_ids:
-                            # Recuperar chunks usando a busca por IDs que existe (método hybrid_search)
-                            # Ao invés de tentar usar get_chunks_by_ids que não existe
-                            chunks_dict = {}
-                            for chunk_id in chunk_ids:
-                                # Usar o método existente get_chunk_by_id se disponível, ou adaptar para usar outros métodos
-                                try:
-                                    # Verificar se existe get_chunk_by_id
-                                    if hasattr(rag_service._chunk_repository, "get_chunk_by_id"):
-                                        chunk = await rag_service._chunk_repository.get_chunk_by_id(chunk_id)
-                                        if chunk:
-                                            chunks_dict[chunk_id] = chunk
-                                    else:
-                                        # Se não existe, tentar usar outra abordagem (exemplo: busca por texto)
-                                        # Este é um fallback e pode ser menos eficiente
-                                        logger.info(f"Método get_chunk_by_id não encontrado, usando alternativa para chunk ID {chunk_id}")
-                                        # Usar debug_info existente se possível
-                                        for detail in final_chunk_details:
-                                            if detail.get("id") == chunk_id and detail.get("content"):
-                                                chunks_dict[chunk_id] = type('Chunk', (), {'content': detail.get("content")})
-                                                break
-                                except Exception as e:
-                                    logger.warning(f"Erro ao recuperar chunk {chunk_id}: {e}")
-                                
-                            # Organizar os chunks na mesma ordem dos IDs originais
-                            chunks = []
-                            for chunk_id in chunk_ids:
-                                if chunk_id in chunks_dict:
-                                    chunks.append(chunks_dict[chunk_id])
-                                
-                            if chunks:
-                                contexts = [chunk.content for chunk in chunks]
-                                logger.info(f"Contextos recuperados para item {i+1}.")
-                            else:
-                                # Fallback para placeholders
-                                contexts = [f"Placeholder Context ID: {details.get('id', 'N/A')}, Doc: {details.get('doc_id', 'N/A')}" 
-                                           for details in final_chunk_details]
-                                placeholders_detected = True
-                        else:
-                            contexts = [f"Placeholder Context (No ID available) {j+1}" for j in range(len(final_chunk_details))]
-                            placeholders_detected = True
-                    except Exception as repo_err:
-                        logger.error(f"Erro ao recuperar chunks do repositório: {repo_err}", exc_info=True)
-                        # Fallback para placeholders
-                        contexts = [f"Placeholder Context ID: {details.get('id', 'N/A')}, Doc: {details.get('doc_id', 'N/A')}" 
-                                   for details in final_chunk_details]
-                        placeholders_detected = True
-                else:
-                    # Último caso: não temos nenhuma identificação útil
-                    contexts = [f"Placeholder Context {j+1}" for j in range(len(final_chunk_details))]
-                    placeholders_detected = (True if debug_info.get("num_results", 0) > 0 else False)
+            # Tentar obter o texto diretamente de 'text_content' em final_chunk_details
+            if (final_chunk_details and
+                isinstance(final_chunk_details, list) and
+                len(final_chunk_details) > 0 and
+                isinstance(final_chunk_details[0], dict) and
+                "text_content" in final_chunk_details[0]):
+
+                contexts = [details.get("text_content", "") for details in final_chunk_details]
+                logger.debug(f"Contextos obtidos diretamente de 'text_content' para item {i+1}.")
+                # Verificar se algum contexto ainda está vazio (improvável, mas possível)
+                if not all(contexts):
+                    logger.warning(f"Alguns contextos extraídos de 'text_content' estão vazios para item {i+1}.")
+
             else:
-                # Fallback se não houver 'final_chunk_details' ou formato inesperado
-                contexts = [f"Placeholder Context {j+1}" for j in range(debug_info.get("num_results", 0))]
-                placeholders_detected = (True if debug_info.get("num_results", 0) > 0 else False)
-
-            if placeholders_detected:
+                # Se 'text_content' não estiver disponível ou a estrutura for inesperada, logar e usar placeholders
                 logger.warning(
-                    f"Contextos para item {i+1} ('{question[:30]}...') parecem ser placeholders. Métricas de contexto RAGAS (precision/recall) serão imprecisas."
+                    f"Não foi possível extrair 'text_content' de final_chunk_details para item {i+1} ('{question[:30]}...'). Verifique o debug_info do RAGService. Usando placeholders."
                 )
-            # --- Fim Extração de Contexto ---
+                # Criar placeholders baseados no número de chunks reportados (se disponível)
+                num_results = debug_info.get("num_results", len(final_chunk_details))
+                contexts = [f"Placeholder Context {j+1} (text missing)" for j in range(num_results)]
+                placeholders_used = True
+
+            # --- FIM DA EXTRAÇÃO DE CONTEXTO (SIMPLIFICADA) ---
 
             if not answer:
                 logger.warning(f"Resposta gerada vazia para item {i+1}.")
-            if not contexts:
-                logger.warning(
-                    f"Nenhum contexto recuperado/processado para item {i+1}."
-                )
+            if not contexts or placeholders_used:
+                 if placeholders_used:
+                      logger.warning(f"Contextos para item {i+1} são placeholders. Métricas de contexto RAGAS podem ser 0 ou imprecisas.")
+                 else: # contexts is empty list
+                      logger.warning(f"Nenhum contexto recuperado/processado para item {i+1}.")
+
             if not ground_truth_contexts:
                 logger.warning(
                     f"Item {i+1} não possui 'ground_truths' (contextos ideais). Context Recall será 0."
                 )
 
         except Exception as e:
-            logger.error(
-                f"Erro ao processar item {i+1} ('{question[:60]}...') com RAGService: {e}",
-                exc_info=True,
-            )
-            answer = f"ERRO: {type(e).__name__}"  # Resposta indicando erro
-            contexts = []  # Garante lista vazia
+            logger.error(f"Erro ao processar item {i+1} ('{question[:60]}...') com RAGService: {e}", exc_info=True)
+            answer = f"ERRO: {type(e).__name__}"
+            contexts = []
 
         # Adiciona o ponto de dados para o dataset RAGAS/DeepEval
         processed_data.append(
             {
-                "question": question,  # str: A pergunta feita
-                "answer": answer,  # str: A resposta gerada pelo RAG
-                "contexts": contexts,  # List[str]: Os textos dos chunks recuperados/usados
-                "ground_truth": ground_truth_answer,  # str: A resposta ideal esperada
-                "ground_truths": ground_truth_contexts,  # List[str]: Os textos dos chunks ideais
+                "question": question,
+                "answer": answer,
+                "contexts": contexts, # Lista simplificada
+                "ground_truth": ground_truth_answer,
+                "ground_truths": ground_truth_contexts,
             }
         )
 

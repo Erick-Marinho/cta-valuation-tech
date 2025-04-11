@@ -30,3 +30,4 @@ alembic>=1.13.0
 psycopg[binary]
 sqlmodel>=0.0.16 
 pgvector>=0.1.8
+nltk
