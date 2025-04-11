@@ -51,7 +51,7 @@ class ListDocumentsUseCase:
                     size_kb=doc.size_kb,
                     chunks_count=doc.chunks_count,
                     processed=doc.processed,
-                    metadata=doc.metadata,
+                    metadata=doc.metadata.to_dict() if doc.metadata else {},
                 )
                 for doc in documents_page if doc and doc.id is not None
             ]

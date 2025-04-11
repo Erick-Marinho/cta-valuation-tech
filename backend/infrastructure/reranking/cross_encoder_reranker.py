@@ -63,7 +63,7 @@ class CrossEncoderReRanker(ReRanker):
         self,
         query: str,
         chunks: List[Chunk]
-    ) -> List[Chunk]:
+    ) -> List[Tuple[Chunk, float]]:
         """
         Reordena chunks usando o modelo Cross-Encoder carregado.
 
@@ -76,11 +76,11 @@ class CrossEncoderReRanker(ReRanker):
             if not chunks:
                 logger.warning("Tentativa de rerank com lista de chunks vazia.")
                 span.set_status(trace.StatusCode.OK, "Lista de chunks vazia.")
-                return []
+                return [(chunk, 0.0) for chunk in chunks]
             if not query:
                  logger.warning("Tentativa de rerank com query vazia.")
                  span.set_status(trace.StatusCode.OK, "Query vazia.")
-                 return chunks # Retorna original se query for vazia? Ou lista vazia? Original parece mais seguro.
+                 return [(chunk, 0.0) for chunk in chunks]
 
             try:
                 start_predict = time.time()
@@ -103,26 +103,24 @@ class CrossEncoderReRanker(ReRanker):
                 if len(scores) != len(chunks):
                      logger.error(f"Número de scores ({len(scores)}) diferente do número de chunks ({len(chunks)})!")
                      span.set_status(trace.StatusCode.ERROR, "Mismatch entre scores e chunks.")
-                     # Retornar original em caso de erro? Ou lançar exceção? Retornar original por segurança.
-                     return chunks
+                     # Retornar lista de tuplas com score 0 ou erro? Score 0.
+                     return [(chunk, 0.0) for chunk in chunks]
 
                 # Combinar chunks com seus scores
                 chunks_with_scores: List[Tuple[Chunk, float]] = list(zip(chunks, scores))
 
-                # Ordenar pela pontuação do CrossEncoder (decrescente)
+                # Ordenar pela pontuação (decrescente)
                 chunks_with_scores.sort(key=lambda item: item[1], reverse=True)
 
-                # Extrair apenas os chunks ordenados
-                reranked_chunks: List[Chunk] = [chunk for chunk, score in chunks_with_scores]
-
-                span.set_attribute("reranker.output_chunks_count", len(reranked_chunks))
+                span.set_attribute("reranker.output_chunks_count", len(chunks_with_scores))
                 span.set_status(trace.StatusCode.OK)
-                logger.info(f"Re-ranking concluído. {len(reranked_chunks)} chunks reordenados.")
-                return reranked_chunks
+                logger.info(f"Re-ranking concluído. {len(chunks_with_scores)} chunks reordenados com scores.")
+                # Retornar a lista de tuplas (Chunk, score)
+                return chunks_with_scores
 
             except Exception as e:
                  logger.error(f"Erro durante o re-ranking com CrossEncoder: {e}", exc_info=True)
                  span.record_exception(e)
                  span.set_status(trace.StatusCode.ERROR, description=str(e))
-                 # Em caso de erro, retorna a lista original não reordenada
-                 return chunks
+                 # Retornar lista original com scores 0.0 para manter o tipo de retorno
+                 return [(chunk, 0.0) for chunk in chunks]

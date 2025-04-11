@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional, Tuple, Dict
+from typing import List, Optional, Tuple, Dict, Any
 import json
 import asyncio
 
@@ -54,135 +54,166 @@ class SqlModelChunkRepository(ChunkRepository):
             metadata=metadata_dict
         )
 
-    # --- Implementação dos Métodos do Repositório ---
+    # --- Métodos da Interface (Com assinatura limpa, mas funcionalidade limitada) ---
 
-    async def save(self, chunk: Chunk, embedding: List[float]) -> Chunk:
+    async def save(self, chunk: Chunk) -> Chunk:
         """
-        Salva um único chunk e seu embedding associado.
-        Útil para casos onde não se está processando em lote.
-
-        Args:
-            chunk: A entidade Chunk do domínio (sem o embedding).
-            embedding: O vetor de embedding calculado para este chunk.
-
-        Returns:
-            A entidade Chunk salva (com ID preenchido/atualizado).
+        Salva um único chunk SEM seu embedding.
+        ATENÇÃO: Geralmente não é útil, pois o embedding é crucial.
+        Use save_with_embedding para salvar com o vetor.
         """
-        if len(embedding) != EMBEDDING_DIM:
-             logger.error(f"Tentativa de salvar chunk ID {chunk.id or 'novo'} com dimensão de embedding incorreta ({len(embedding)} != {EMBEDDING_DIM})")
-             raise ValueError("Dimensão de embedding incorreta")
-
+        logger.warning(f"Chamada a save() em SqlModelChunkRepository para chunk ID {chunk.id} sem embedding. O embedding NÃO será salvo/atualizado.")
+        # Implementação simplificada que salva/atualiza apenas dados não-vetoriais
         try:
             if chunk.id:
-                # Atualizar (raro para chunks, mas possível)
                 db_chunk = await self._session.get(ChunkDB, chunk.id)
                 if db_chunk:
                     db_chunk.texto = chunk.text
                     db_chunk.pagina = chunk.page_number
                     db_chunk.posicao = chunk.position
                     db_chunk.metadados = chunk.metadata
-                    db_chunk.embedding = embedding # Atualiza o embedding
-                    logger.debug(f"Preparando para atualizar ChunkDB ID: {chunk.id}")
+                    # db_chunk.embedding NÃO é atualizado
+                    logger.debug(f"Preparando para atualizar ChunkDB ID: {chunk.id} (sem embedding)")
                 else:
-                    logger.error(f"ChunkDB ID {chunk.id} não encontrado para atualização.")
-                    raise ValueError(f"Chunk com ID {chunk.id} não encontrado para atualização.")
+                     raise ValueError(f"Chunk com ID {chunk.id} não encontrado para atualização.")
             else:
-                # Inserir
-                db_chunk = ChunkDB(
-                    documento_id=chunk.document_id,
-                    texto=chunk.text,
-                    embedding=embedding, # Usa o embedding passado como argumento
-                    pagina=chunk.page_number,
-                    posicao=chunk.position,
-                    metadados=chunk.metadata
-                )
-                self._session.add(db_chunk)
-                logger.debug(f"Preparando para inserir novo ChunkDB para doc ID {chunk.document_id}")
+                 # Inserir sem embedding (se a coluna permitir NULL ou tiver default)
+                 db_chunk = ChunkDB(
+                     documento_id=chunk.document_id,
+                     texto=chunk.text,
+                     pagina=chunk.page_number,
+                     posicao=chunk.position,
+                     metadados=chunk.metadata,
+                     embedding=None # Ou omitir se tiver default/gerado no DB
+                 )
+                 self._session.add(db_chunk)
+                 logger.debug(f"Preparando para inserir novo ChunkDB para doc ID {chunk.document_id} (sem embedding)")
 
             await self._session.commit()
             await self._session.refresh(db_chunk)
-            logger.info(f"Chunk salvo com ID: {db_chunk.id}")
-
-            return self._map_db_to_domain(db_chunk) # Retorna entidade de domínio atualizada
+            logger.info(f"Chunk salvo (sem embedding) com ID: {db_chunk.id}")
+            return self._map_db_to_domain(db_chunk)
 
         except Exception as e:
-            logger.exception(f"Erro ao salvar chunk (ID: {chunk.id}, Doc ID: {chunk.document_id}): {e}")
+            logger.exception(f"Erro ao salvar chunk (sem embedding) (ID: {chunk.id}, Doc ID: {chunk.document_id}): {e}")
             await self._session.rollback()
             raise
 
-    async def save_batch(self, chunks_with_embeddings: List[Tuple[Chunk, List[float]]]) -> List[Chunk]:
+    async def save_batch(self, chunks: List[Chunk]) -> List[Chunk]:
         """
-        Salva uma lista de chunks e seus embeddings associados em lote.
-
-        Args:
-            chunks_with_embeddings: Uma lista de tuplas, onde cada tupla contém
-                                     (Chunk do domínio, List[float] do embedding).
-
-        Returns:
-            Lista das entidades Chunk salvas (com IDs preenchidos).
+        Salva uma lista de chunks SEM seus embeddings.
+        ATENÇÃO: Geralmente não é útil. Use save_batch_with_embeddings.
         """
+        logger.warning(f"Chamada a save_batch() em SqlModelChunkRepository para {len(chunks)} chunks sem embeddings. Os embeddings NÃO serão salvos.")
+        # Implementação levanta erro ou salva sem embeddings
+        # Por simplicidade, vamos levantar erro para desencorajar o uso
+        raise NotImplementedError("save_batch sem embeddings não é suportado. Use save_batch_with_embeddings.")
+        # Alternativa: implementar loop chamando save() acima, mas ineficiente
+
+    # --- Métodos Específicos da Implementação (Com Embeddings) ---
+
+    async def save_with_embedding(self, chunk: Chunk, embedding: List[float]) -> Chunk:
+         """ Salva (cria ou atualiza) um único chunk COM seu embedding. """
+         # Esta é a lógica que estava anteriormente em save()
+         logger.debug(f"Executando save_with_embedding para chunk (ID: {chunk.id}, Doc ID: {chunk.document_id})")
+         try:
+             if chunk.id:
+                 # Atualizar
+                 db_chunk = await self._session.get(ChunkDB, chunk.id)
+                 if db_chunk:
+                     db_chunk.texto = chunk.text
+                     db_chunk.pagina = chunk.page_number
+                     db_chunk.posicao = chunk.position
+                     db_chunk.metadados = chunk.metadata
+                     db_chunk.embedding = embedding # <-- Atualiza o embedding
+                     logger.debug(f"Preparando para atualizar ChunkDB ID: {chunk.id} (com embedding)")
+                 else:
+                     raise ValueError(f"Chunk com ID {chunk.id} não encontrado para atualização.")
+             else:
+                 # Inserir
+                 db_chunk = ChunkDB(
+                     documento_id=chunk.document_id,
+                     texto=chunk.text,
+                     embedding=embedding, # <-- Usa o embedding passado
+                     pagina=chunk.page_number,
+                     posicao=chunk.position,
+                     metadados=chunk.metadata
+                 )
+                 self._session.add(db_chunk)
+                 logger.debug(f"Preparando para inserir novo ChunkDB para doc ID {chunk.document_id} (com embedding)")
+
+             await self._session.commit()
+             await self._session.refresh(db_chunk)
+             logger.info(f"Chunk salvo (com embedding) com ID: {db_chunk.id}")
+             return self._map_db_to_domain(db_chunk)
+
+         except Exception as e:
+             logger.exception(f"Erro ao salvar chunk com embedding (ID: {chunk.id}, Doc ID: {chunk.document_id}): {e}")
+             await self._session.rollback()
+             raise
+
+
+    async def save_batch_with_embeddings(self, chunks_with_embeddings: List[Tuple[Chunk, List[float]]]) -> List[Chunk]:
+        """ Salva uma lista de chunks com seus embeddings associados de forma eficiente. """
+        # Esta é a lógica que estava anteriormente em save_batch()
+        logger.debug(f"Executando save_batch_with_embeddings para {len(chunks_with_embeddings)} chunks.")
         if not chunks_with_embeddings:
-            logger.info("save_batch chamado com lista vazia.")
             return []
 
-        logger.info(f"Iniciando save_batch para {len(chunks_with_embeddings)} chunks.")
-        start_time = asyncio.get_event_loop().time()
+        # Mapear entidades de domínio + embeddings para o formato do banco (lista de dicts)
+        values_to_insert = []
+        chunks_to_return: List[Chunk] = [] # Para manter a ordem e retornar
+        for domain_chunk, embedding_vector in chunks_with_embeddings:
+             if not domain_chunk.document_id:
+                 logger.error(f"Chunk sem documento_id não pode ser salvo: {domain_chunk}")
+                 continue # Pular este chunk
 
-        db_chunk_values = []
-        domain_chunks_input_order = [] # Para mapear de volta após o insert
-
-        for chunk, embedding_vector in chunks_with_embeddings:
-            domain_chunks_input_order.append(chunk) # Guarda a ordem original
-            if len(embedding_vector) != EMBEDDING_DIM:
-                 logger.error(f"Chunk para doc {chunk.document_id} (pág {chunk.page_number}, pos {chunk.position}) tem dimensão de embedding incorreta ({len(embedding_vector)}). Pulando.")
-                 continue # Pula este chunk
-
-            db_chunk_values.append({
-                "documento_id": chunk.document_id,
-                "texto": chunk.text,
-                "embedding": embedding_vector, # Embedding vem da tupla
-                "pagina": chunk.page_number,
-                "posicao": chunk.position,
-                "metadados": chunk.metadata or {},
-            })
-
-        if not db_chunk_values:
-             logger.warning("Nenhum chunk válido para inserir após validação de embedding.")
-             return []
+             values_to_insert.append({
+                 "documento_id": domain_chunk.document_id,
+                 "texto": domain_chunk.text,
+                 "embedding": embedding_vector, # Embedding já é List[float]
+                 "pagina": domain_chunk.page_number,
+                 "posicao": domain_chunk.position,
+                 "metadados": json.dumps(domain_chunk.metadata) if domain_chunk.metadata else None # Garantir JSON para metadados
+             })
+             chunks_to_return.append(domain_chunk) # Adiciona o chunk original à lista
 
         try:
-            # Usar bulk_insert_mappings para eficiência, mas não retorna IDs facilmente.
-            # await self._session.bulk_insert_mappings(ChunkDB, db_chunk_values)
+            # Usar INSERT ... ON CONFLICT (UPSERT) se o ID não for garantido único ou se for atualização
+            # Se for sempre inserção nova (ID gerado pelo DB), um INSERT simples basta.
+            # Assumindo INSERT simples por enquanto.
+            # Se a tabela ChunkDB tiver um ID auto-incrementável, precisamos recuperá-los.
 
-            # Alternativa: Usar INSERT ... RETURNING id com SQLAlchemy Core API para obter os IDs
-            stmt = pg_insert(ChunkDB).values(db_chunk_values).returning(ChunkDB.id, ChunkDB) # Retorna ID e objeto DB completo
+            # Usar a sintaxe pg_insert para retornar os IDs (ou todos os campos)
+            stmt = pg_insert(ChunkDB).values(values_to_insert)
+            # Adicionar cláusula RETURNING para obter os IDs (ou outros campos) gerados
+            # Ajuste o nome 'id' se for diferente na sua classe ChunkDB
+            stmt = stmt.returning(ChunkDB.id, ChunkDB.documento_id, ChunkDB.texto, ChunkDB.pagina, ChunkDB.posicao, ChunkDB.metadados)
+
             result = await self._session.execute(stmt)
-            # `result.mappings().all()` pode funcionar dependendo da versão/dialeto
-            # `result.all()` retorna tuplas (id, ChunkDB)
-            saved_db_objects = [row._mapping['ChunkDB'] for row in result.all()] # Extrai o objeto ChunkDB
-
             await self._session.commit()
-            duration = asyncio.get_event_loop().time() - start_time
-            logger.info(f"{len(saved_db_objects)} chunks salvos em lote em {duration:.2f}s.")
 
-            # Mapear de volta para o domínio
-            # Precisamos mapear os resultados salvos para os domain_chunks originais
-            # Isso é complexo sem um identificador único antes do save.
-            # Abordagem mais simples: mapear os objetos retornados pelo RETURNING
-            saved_domain_chunks = [self._map_db_to_domain(db_obj) for db_obj in saved_db_objects]
-            # Filtrar Nones caso algum mapeamento falhe
-            valid_saved_domain_chunks = [chunk for chunk in saved_domain_chunks if chunk is not None]
+            # Mapear resultados de volta para atualizar IDs nos Chunks de domínio
+            inserted_rows = result.fetchall() # Fetchall para pegar todas as linhas retornadas
+            if len(inserted_rows) != len(chunks_to_return):
+                 logger.warning(f"Número de linhas retornadas ({len(inserted_rows)}) diferente do número de chunks enviados ({len(chunks_to_return)})")
+                 # Pode precisar de lógica mais robusta para mapear de volta se a ordem não for garantida
 
-            if len(valid_saved_domain_chunks) != len(db_chunk_values):
-                logger.warning(f"Número de chunks mapeados de volta ({len(valid_saved_domain_chunks)}) difere do número inserido ({len(db_chunk_values)}).")
+            # Atualizar os IDs nos objetos Chunk que vamos retornar
+            for i, row in enumerate(inserted_rows):
+                 if i < len(chunks_to_return):
+                     # row[0] deve ser o ID retornado
+                     chunks_to_return[i].id = row[0] # Atualiza o ID no objeto de domínio
 
-            return valid_saved_domain_chunks
+            logger.info(f"{len(inserted_rows)} chunks salvos em lote (com embeddings).")
+            return chunks_to_return # Retorna os chunks originais, agora com IDs
 
         except Exception as e:
-            logger.exception(f"Erro ao salvar chunks em lote: {e}")
+            logger.exception(f"Erro ao salvar chunks em lote com embeddings: {e}")
             await self._session.rollback()
-            raise # Relança a exceção
+            raise
 
+    # --- Métodos find_* e delete_* (Manter como estão, eles operam sobre dados existentes) ---
     async def find_by_id(self, chunk_id: int) -> Optional[Chunk]:
         """ Busca um chunk pelo seu ID. """
         try:
@@ -439,3 +470,48 @@ class SqlModelChunkRepository(ChunkRepository):
         except Exception as e:
             logger.error(f"Erro ao buscar chunk por ID {chunk_id}: {e}")
             return None
+
+    # --- Implementação de find_similar_chunks ---
+    async def find_similar_chunks(
+        self,
+        embedding_vector: List[float],
+        limit: int,
+        filter_document_ids: Optional[List[int]] = None
+        # Retornar List[Tuple[Chunk, float]] seria mais informativo
+    ) -> List[Chunk]: # Ajustar tipo de retorno se necessário
+        """ Encontra chunks semanticamente similares usando busca vetorial. """
+        logger.debug(f"Executando find_similar_chunks com limite {limit} e filtro: {filter_document_ids}")
+        try:
+             # Construir a query base selecionando ChunkDB e a distância
+             # Usar l2_distance (<->), max_inner_product (<#>), ou cosine_distance (<=>)
+             # A escolha depende de como seus embeddings foram normalizados/treinados.
+             # Cosseno é comum: <=>
+             distance_op = ChunkDB.embedding.cosine_distance(embedding_vector)
+             # Ou L2: distance_op = ChunkDB.embedding.l2_distance(embedding_vector)
+
+             stmt = select(ChunkDB, distance_op.label("distance")).order_by(distance_op).limit(limit)
+
+             # Adicionar filtro de documento se fornecido
+             if filter_document_ids:
+                 stmt = stmt.where(ChunkDB.documento_id.in_(filter_document_ids))
+
+             results = await self._session.execute(stmt)
+             # results.all() retorna tuplas (ChunkDB, distance)
+             db_chunks_with_distance = results.all()
+
+             # Mapear para entidades de domínio (e potencialmente incluir a distância)
+             domain_chunks: List[Chunk] = []
+             # domain_chunks_with_score: List[Tuple[Chunk, float]] = [] # Alternativa
+             for db_chunk, distance in db_chunks_with_distance:
+                 domain_chunk = self._map_db_to_domain(db_chunk)
+                 if domain_chunk:
+                     domain_chunks.append(domain_chunk)
+                     # score = 1 - distance # Exemplo de conversão de distância cosseno para score (0 a 1)
+                     # domain_chunks_with_score.append((domain_chunk, score))
+
+             logger.info(f"Busca vetorial encontrou {len(domain_chunks)} chunks similares.")
+             return domain_chunks # Ou return domain_chunks_with_score
+
+        except Exception as e:
+             logger.exception(f"Erro durante a busca por similaridade de chunks: {e}")
+             return []

@@ -41,6 +41,18 @@ class ChunkRepository(ABC):
         """ Exclui todos os chunks associados a um documento. Retorna o número de chunks excluídos. """
         pass
 
+    # Interface para busca vetorial pode ser adicionada aqui ou em um serviço separado
+    @abstractmethod
+    async def find_similar_chunks(
+        self,
+        embedding_vector: List[float], # <-- Busca *precisa* do vetor
+        limit: int,
+        filter_document_ids: Optional[List[int]] = None
+        # Poderia retornar List[Tuple[Chunk, float]] para incluir score
+    ) -> List[Chunk]: # Ou List[Tuple[Chunk, float]]
+         """ Encontra chunks semanticamente similares a um dado vetor de embedding. """
+         pass
+
     # Métodos adicionais podem ser necessários, como busca por similaridade vetorial.
     # No entanto, a busca vetorial muitas vezes retorna mais do que apenas a entidade Chunk
     # (ex: scores), então pode ser melhor definida em um serviço de busca ou caso de uso específico

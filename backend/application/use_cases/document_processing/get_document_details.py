@@ -56,7 +56,7 @@ class GetDocumentDetailsUseCase:
                      size_kb=document.size_kb,
                      chunks_count=document.chunks_count,
                      processed=document.processed,
-                     metadata=document.metadata,
+                     metadata=document.metadata.to_dict() if document.metadata else {},
                  )
                  # -------------------------------
                  return document_dto # Retorna o DTO
