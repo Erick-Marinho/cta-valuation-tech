@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Optional, Dict, Any # Adicionar Dict, Any para save_batch
+from typing import List, Optional, Dict, Any, Tuple # Adicionar Dict, Any para save_batch e Tuple
 # Importar a entidade Chunk do domínio
 from ..aggregates.document.chunk import Chunk
 
@@ -45,13 +45,17 @@ class ChunkRepository(ABC):
     @abstractmethod
     async def find_similar_chunks(
         self,
-        embedding_vector: List[float], # <-- Busca *precisa* do vetor
+        embedding_vector: List[float],
         limit: int,
         filter_document_ids: Optional[List[int]] = None
-        # Poderia retornar List[Tuple[Chunk, float]] para incluir score
-    ) -> List[Chunk]: # Ou List[Tuple[Chunk, float]]
-         """ Encontra chunks semanticamente similares a um dado vetor de embedding. """
+    ) -> List[Tuple[Chunk, float]]: # <-- MUDANÇA: Retorna tupla com score
+         """ Encontra chunks semanticamente similares a um dado vetor de embedding, retornando scores. """
          pass
+
+    @abstractmethod
+    async def find_by_keyword(self, query: str, limit: int, filter_document_ids: Optional[List[int]] = None) -> List[Tuple[Chunk, float]]:
+        """ Encontra chunks baseados na relevância textual (keyword search), retornando scores. """
+        pass
 
     # Métodos adicionais podem ser necessários, como busca por similaridade vetorial.
     # No entanto, a busca vetorial muitas vezes retorna mais do que apenas a entidade Chunk

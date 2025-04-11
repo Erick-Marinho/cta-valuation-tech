@@ -37,6 +37,9 @@ from domain.aggregates.document.chunk import Chunk # Importar entidade Chunk
 from application.interfaces.reranker import ReRanker # Importar interface ReRanker
 from domain.value_objects.embedding import Embedding # <-- Adicionar ou verificar import
 
+# Importar a função RRF
+from application.ranking.rrf import reciprocal_rank_fusion # <-- Adicionar import
+
 logger = logging.getLogger(__name__)
 
 
@@ -91,7 +94,6 @@ class RAGService:
          """ Reordena os chunks e retorna tuplas (Chunk, score). """
          logger.info(f"Iniciando re-ranking de {len(chunks)} chunks...")
          if not chunks: return []
-         # Chama o método da interface ReRanker (que agora retorna tuplas)
          reranked_list_with_scores = await self._reranker.rerank(query=query, chunks=chunks)
          return reranked_list_with_scores
 
@@ -154,49 +156,80 @@ class RAGService:
                     if not query_embedding_vector: # Checar novamente após possível fallback
                          raise ValueError("Falha ao gerar embedding válido para a consulta.")
 
-                # 3. Busca Vetorial no Repositório de Chunks
-                with self.tracer.start_as_current_span("vector_search.find_similar") as search_span:
-                    start_search = time.time()
-                    search_span.set_attribute("vector.query_vector_length", len(query_embedding_vector)) # <-- Usar o vetor
-                    search_span.set_attribute("param.limit", limit)
-                    if filtro_documentos:
-                         search_span.set_attribute("param.filter_doc_ids", str(filtro_documentos))
+                # --- Busca Híbrida ---
+                # 3a. Busca Vetorial (já retorna scores)
+                with self.tracer.start_as_current_span("vector_search.find_similar") as vec_span:
+                     # Definir um limite maior para a busca inicial, para dar mais opções ao RRF/reranker
+                     initial_search_limit = limit * 4 # Ex: buscar 4x mais resultados inicialmente
+                     vec_span.set_attribute("param.initial_limit", initial_search_limit)
+                     vector_results: List[Tuple[Chunk, float]] = await self._chunk_repository.find_similar_chunks(
+                         embedding_vector=query_embedding_vector,
+                         limit=initial_search_limit, # <-- Usar limite maior
+                         filter_document_ids=filtro_documentos,
+                     )
+                     vec_span.set_attribute("result.chunks_found_count", len(vector_results))
+                     logger.info(f"Busca vetorial retornou {len(vector_results)} chunks.")
 
-                    # O método find_similar_chunks provavelmente espera List[float]
-                    similar_chunks = await self._chunk_repository.find_similar_chunks(
-                        embedding_vector=query_embedding_vector, # <-- MUDANÇA: Passar o vetor numérico
-                        limit=limit,
-                        filter_document_ids=filtro_documentos,
-                    )
-                    search_span.set_attribute("duration_ms", int((time.time() - start_search) * 1000))
-                    search_span.set_attribute("result.chunks_found_count", len(similar_chunks))
+                # 3b. Busca por Keyword (já retorna scores)
+                with self.tracer.start_as_current_span("keyword_search.find_by_keyword") as key_span:
+                     key_span.set_attribute("param.initial_limit", initial_search_limit)
+                     keyword_results: List[Tuple[Chunk, float]] = await self._chunk_repository.find_by_keyword(
+                         query=clean_query_text, # Usar query limpa
+                         limit=initial_search_limit, # <-- Usar limite maior
+                         filter_document_ids=filtro_documentos,
+                     )
+                     key_span.set_attribute("result.chunks_found_count", len(keyword_results))
+                     logger.info(f"Busca por keyword retornou {len(keyword_results)} chunks.")
+                # --------------------
 
-                # 4. Re-ranking (Obtém Lista de Tuplas)
-                with self.tracer.start_as_current_span("document_processing.rerank") as rerank_span:
-                    rerank_span.set_attribute("reranking.input_chunks_count", len(similar_chunks))
-                    # _rerank_results agora retorna List[Tuple[Chunk, float]]
-                    reranked_chunks_with_scores: List[Tuple[Chunk, float]] = await self._rerank_results(similar_chunks, clean_query_text) # <-- MUDANÇA: Capturar tuplas
-                    rerank_span.set_attribute("reranking.output_chunks_count", len(reranked_chunks_with_scores))
-                # -----------------------------------------
+                # 4. Reciprocal Rank Fusion (RRF)
+                with self.tracer.start_as_current_span("ranking.rrf") as rrf_span:
+                     # Passar as listas de resultados para RRF
+                     rrf_ranked_chunks, hybrid_scores = reciprocal_rank_fusion(
+                         [vector_results, keyword_results], # Lista das duas listas de resultados
+                         k=60 # Parâmetro k (ajustável)
+                     )
+                     rrf_span.set_attribute("rrf.output_chunks_count", len(rrf_ranked_chunks))
+                     # hybrid_scores AGORA ESTÁ DEFINIDO! É o dict retornado pelo RRF.
+                     logger.info(f"RRF combinou resultados em {len(rrf_ranked_chunks)} chunks únicos.")
+                # --------------------
 
-                # --- 6. Limitar ao número FINAL de resultados ---
-                # Aplicar limite na lista de tuplas
-                final_chunks_with_scores = reranked_chunks_with_scores[:limit] # <-- MUDANÇA: Limitar tuplas
-                # Extrair apenas os chunks finais para o contexto, se necessário
-                final_chunks: List[Chunk] = [chunk for chunk, score in final_chunks_with_scores] # <-- Extrair chunks
-                # Criar um dicionário de scores para fácil acesso pelo ID do chunk
-                final_scores: Dict[int, float] = {chunk.id: score for chunk, score in final_chunks_with_scores if chunk.id is not None} # <-- Criar dict de scores
+                # 5. Re-ranking (Opcional, mas geralmente útil após RRF)
+                reranked_chunks_with_scores: List[Tuple[Chunk, float]] = []
+                if rrf_ranked_chunks: # Só re-rankear se RRF retornou algo
+                     with self.tracer.start_as_current_span("ranking.rerank_after_rrf") as rerank_span:
+                          rerank_span.set_attribute("reranking.input_chunks_count", len(rrf_ranked_chunks))
+                          # Passar a lista ordenada pelo RRF para o re-ranker
+                          reranked_chunks_with_scores = await self._rerank_results(rrf_ranked_chunks, clean_query_text)
+                          rerank_span.set_attribute("reranking.output_chunks_count", len(reranked_chunks_with_scores))
+                          logger.info(f"Re-ranking após RRF retornou {len(reranked_chunks_with_scores)} chunks com scores.")
+                else:
+                     logger.info("Pulando re-ranking pois RRF não retornou chunks.")
+                     reranked_chunks_with_scores = [] # Manter como lista vazia
+                # --------------------
 
-                logger.info(f"Limitando contexto final para {len(final_chunks)} chunks após rerank.")
+                # 6. Limitar ao número FINAL de resultados (baseado no resultado do reranker)
+                final_chunks_with_scores = reranked_chunks_with_scores[:limit]
+                final_chunks: List[Chunk] = [chunk for chunk, score in final_chunks_with_scores]
+                # Criar dict de scores finais (do reranker)
+                final_reranker_scores: Dict[int, float] = {
+                    chunk.id: float(score) for chunk, score in final_chunks_with_scores if chunk.id is not None
+                }
+                # Manter também os scores RRF para debug (do dict hybrid_scores)
+                final_rrf_scores: Dict[int, float] = {
+                     chunk.id: hybrid_scores.get(chunk.id, 0.0) for chunk in final_chunks if chunk.id is not None
+                }
+
+                logger.info(f"Contexto final limitado a {len(final_chunks)} chunks.")
                 span.set_attribute("retrieval.final_chunks_count", len(final_chunks))
-                # --------------------------------------------
+                # --------------------
 
-                # Usar os scores do reranker para métricas
-                for chunk, score in final_chunks_with_scores:
-                     # Usar o score do reranker (item[1] da tupla)
-                     record_retrieval_score(score, "cross_encoder_rerank") # <-- MUDANÇA: Usar score do reranker e nomear métrica
+                # Usar os scores FINAIS (do reranker) para métricas ou contexto? Ou RRF? Decisão de design.
+                # Vamos usar RRF para métricas por enquanto, pois representa a fusão inicial.
+                for chunk_id, rrf_score in final_rrf_scores.items():
+                     record_retrieval_score(rrf_score, "hybrid_rrf") # Métrica com score RRF
 
-                # 7. Preparar contexto para o LLM (usar score do reranker)
+                # 7. Preparar contexto para o LLM (usar score do reranker, que é mais refinado)
                 with self.tracer.start_as_current_span("context_preparation") as ctx_prep_span:
                     context = ""
                     context_tokens = 0
@@ -208,16 +241,15 @@ class RAGService:
                         ctx_prep_span.set_attribute("context.empty", False)
                         ctx_prep_span.set_attribute("context.chunks_count", len(final_chunks))
                         chunk_texts = []
-                        # Iterar sobre as tuplas para ter acesso ao score
-                        for i, (chunk, score) in enumerate(final_chunks_with_scores): # <-- MUDANÇA: Iterar sobre tuplas
+                        # Iterar sobre as tuplas FINAIS (pós-rerank)
+                        for i, (chunk, reranker_score) in enumerate(final_chunks_with_scores):
                             rerank_pos = i + 1
                             # Usar o score do reranker formatado
-                            score_info = f"[Rank: {rerank_pos}, Score: {score:.4f}]" # <-- MUDANÇA: Usar score real
+                            score_info = f"[Rank: {rerank_pos}, Score: {reranker_score:.4f}]" # Usar score do reranker
                             chunk_header = f"Contexto {i+1} {score_info}\n"
                             chunk_content = chunk.text
                             chunk_texts.append(chunk_header + chunk_content)
                             context_tokens += self._count_tokens(chunk_content)
-
                         context = "\n\n".join(chunk_texts)
 
                     ctx_prep_span.set_attribute("context.length", len(context))
@@ -252,7 +284,7 @@ class RAGService:
                     llm_span.set_attribute("llm.response_tokens", response_tokens)
                     record_tokens(response_tokens, "response") # Métrica
 
-                # 10. Preparar resultado (adicionar score ao debug info)
+                # 10. Preparar resultado (adicionar scores RRF e reranker ao debug)
                 processing_time_total = time.time() - start_time_total
                 span.set_attribute("processing.total_time_ms", int(processing_time_total * 1000))
 
@@ -263,33 +295,28 @@ class RAGService:
 
                 if include_debug_info:
                     final_chunk_details_list = []
-                    # Iterar sobre as tuplas para ter acesso ao score
-                    for rank, (c, score) in enumerate(final_chunks_with_scores):
-                        chunk_detail = {
+                    for rank, (c, reranker_score) in enumerate(final_chunks_with_scores):
+                         chunk_detail = {
                             "id": c.id,
                             "doc_id": c.document_id,
                             "page": c.page_number,
                             "pos": c.position,
                             "text_content": c.text,
                             "final_rank": rank + 1,
-                            # Converter score para float padrão
-                            "reranker_score": float(score) # <-- CORREÇÃO: Converter para float()
-                        }
-                        final_chunk_details_list.append(chunk_detail)
-
-                    # Criar dicionário de scores convertendo para float padrão
-                    final_scores_float: Dict[int, float] = { # <-- CORREÇÃO: Novo dict com float
-                        chunk.id: float(score)
-                        for chunk, score in final_chunks_with_scores if chunk.id is not None
-                    }
+                            "reranker_score": float(reranker_score), # Score final pós-rerank
+                            # Adicionar score RRF original para comparação
+                            "rrf_score": final_rrf_scores.get(c.id) # Score da fusão RRF
+                         }
+                         final_chunk_details_list.append(chunk_detail)
 
                     debug_info = {
                         "query": query,
                         "clean_query": clean_query_text,
                         "num_results": len(final_chunks),
                         "retrieved_chunk_ids_after_rerank": [c.id for c in final_chunks],
-                        # Usar o dicionário com scores convertidos
-                        "retrieved_reranker_scores": final_scores_float, # <-- CORREÇÃO: Usar dict com float
+                        # Mostrar ambos os scores no debug
+                        "retrieved_reranker_scores": final_reranker_scores, # Scores finais
+                        "retrieved_rrf_scores": final_rrf_scores,       # Scores RRF
                         "context_used_length": len(context),
                         "context_used_tokens": context_tokens,
                         "final_chunk_details": final_chunk_details_list

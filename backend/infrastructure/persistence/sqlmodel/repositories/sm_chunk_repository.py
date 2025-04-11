@@ -477,41 +477,92 @@ class SqlModelChunkRepository(ChunkRepository):
         embedding_vector: List[float],
         limit: int,
         filter_document_ids: Optional[List[int]] = None
-        # Retornar List[Tuple[Chunk, float]] seria mais informativo
-    ) -> List[Chunk]: # Ajustar tipo de retorno se necessário
-        """ Encontra chunks semanticamente similares usando busca vetorial. """
+    ) -> List[Tuple[Chunk, float]]:
+        """ Encontra chunks semanticamente similares usando busca vetorial e retorna scores. """
         logger.debug(f"Executando find_similar_chunks com limite {limit} e filtro: {filter_document_ids}")
         try:
-             # Construir a query base selecionando ChunkDB e a distância
-             # Usar l2_distance (<->), max_inner_product (<#>), ou cosine_distance (<=>)
-             # A escolha depende de como seus embeddings foram normalizados/treinados.
-             # Cosseno é comum: <=>
-             distance_op = ChunkDB.embedding.cosine_distance(embedding_vector)
-             # Ou L2: distance_op = ChunkDB.embedding.l2_distance(embedding_vector)
+             # Escolher o operador de distância/similaridade
+             # Ex: Cosseno (<=>), L2 (<->), Produto Interno (<#>)
+             # Para Cosseno, score = 1 - distance. Para Produto Interno, score é o próprio resultado (se normalizado).
+             distance_op = ChunkDB.embedding.cosine_distance(embedding_vector) # Exemplo com Cosseno
+             # Se usar produto interno e quiser score maior = melhor: distance_op = (ChunkDB.embedding.max_inner_product(embedding_vector) * -1)
 
              stmt = select(ChunkDB, distance_op.label("distance")).order_by(distance_op).limit(limit)
 
-             # Adicionar filtro de documento se fornecido
              if filter_document_ids:
                  stmt = stmt.where(ChunkDB.documento_id.in_(filter_document_ids))
 
              results = await self._session.execute(stmt)
-             # results.all() retorna tuplas (ChunkDB, distance)
-             db_chunks_with_distance = results.all()
+             db_chunks_with_distance = results.all() # Retorna tuplas (ChunkDB, distance)
 
-             # Mapear para entidades de domínio (e potencialmente incluir a distância)
-             domain_chunks: List[Chunk] = []
-             # domain_chunks_with_score: List[Tuple[Chunk, float]] = [] # Alternativa
+             # Mapear para entidades de domínio E CALCULAR SCORE
+             domain_chunks_with_score: List[Tuple[Chunk, float]] = []
              for db_chunk, distance in db_chunks_with_distance:
                  domain_chunk = self._map_db_to_domain(db_chunk)
                  if domain_chunk:
-                     domain_chunks.append(domain_chunk)
-                     # score = 1 - distance # Exemplo de conversão de distância cosseno para score (0 a 1)
-                     # domain_chunks_with_score.append((domain_chunk, score))
+                     # Calcular score a partir da distância. Ex: para cosseno.
+                     # Scores maiores indicam maior similaridade.
+                     score = 1.0 - float(distance) # <-- MUDANÇA: Calcular score
+                     # Garantir que score não seja negativo (pode acontecer com L2/outros)
+                     score = max(0.0, score)
+                     domain_chunks_with_score.append((domain_chunk, score)) # <-- MUDANÇA: Adicionar tupla
 
-             logger.info(f"Busca vetorial encontrou {len(domain_chunks)} chunks similares.")
-             return domain_chunks # Ou return domain_chunks_with_score
+             logger.info(f"Busca vetorial encontrou {len(domain_chunks_with_score)} chunks similares com scores.")
+             # Retorna a lista de tuplas (Chunk, score)
+             return domain_chunks_with_score # <-- MUDANÇA: Retornar lista de tuplas
 
         except Exception as e:
              logger.exception(f"Erro durante a busca por similaridade de chunks: {e}")
+             return [] # Retorna lista vazia em caso de erro
+
+    async def find_by_keyword(self, query: str, limit: int, filter_document_ids: Optional[List[int]] = None) -> List[Tuple[Chunk, float]]:
+        """ Encontra chunks baseados na relevância textual (keyword search) usando FTS. """
+        logger.debug(f"Executando find_by_keyword para query: '{query}', limit: {limit}, filtro: {filter_document_ids}")
+        if not query or not query.strip():
+             logger.warning("Busca por keyword com query vazia.")
              return []
+        try:
+            # Usar a expressão indexada (to_tsvector) na query
+            ts_vector_expression = func.to_tsvector('portuguese', ChunkDB.texto)
+            # Usar plainto_tsquery para converter a query do usuário
+            ts_query = func.plainto_tsquery('portuguese', query)
+            # Usar ts_rank para calcular a relevância
+            rank_function = func.ts_rank(ts_vector_expression, ts_query).label("rank")
+
+            # Montar a query: SELECT chunk.*, rank WHERE expressao @@ query ORDER BY rank DESC LIMIT limit
+            stmt = select(ChunkDB, rank_function).\
+                   where(ts_vector_expression.op('@@')(ts_query)).\
+                   order_by(rank_function.desc()).\
+                   limit(limit)
+
+            # Adicionar filtro de documento se fornecido
+            if filter_document_ids:
+                stmt = stmt.where(ChunkDB.documento_id.in_(filter_document_ids))
+
+            results = await self._session.execute(stmt)
+            db_chunks_with_rank = results.all() # Retorna tuplas (ChunkDB, rank)
+
+            domain_chunks_with_score: List[Tuple[Chunk, float]] = []
+            for db_chunk, rank_score in db_chunks_with_rank:
+                domain_chunk = self._map_db_to_domain(db_chunk)
+                if domain_chunk:
+                    # O rank já é um score de relevância (maior é melhor)
+                    # Normalizar para 0-1 pode ser útil para RRF, mas opcional
+                    # score = float(rank_score) / (max_rank + epsilon) # Exemplo normalização
+                    # Por enquanto, usar o rank diretamente como score
+                    score = float(rank_score) if rank_score is not None else 0.0
+                    domain_chunks_with_score.append((domain_chunk, score))
+
+            logger.info(f"Busca por keyword encontrou {len(domain_chunks_with_score)} chunks.")
+            return domain_chunks_with_score
+
+        except Exception as e:
+            # Log detalhado do erro SQL se possível
+            sql_error_msg = str(e.__cause__) if hasattr(e, '__cause__') else str(e)
+            logger.exception(f"Erro durante busca por keyword: {sql_error_msg}")
+            # Verificar se o erro é por falta de configuração FTS
+            if "function to_tsvector(unknown, character varying) does not exist" in sql_error_msg:
+                 logger.error("Erro FTS: Função to_tsvector não encontrada ou extensão não habilitada no PostgreSQL?")
+            elif "operator does not exist: tsvector @@ tsquery" in sql_error_msg:
+                 logger.error("Erro FTS: Operador @@ não encontrado. Índice FTS ou extensão estão corretos?")
+            return [] # Retornar vazio em caso de erro
