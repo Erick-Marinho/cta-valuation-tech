@@ -4,7 +4,9 @@ Configuração central de rotas da API.
 
 from fastapi import APIRouter
 
-from .endpoints import chat, document, health
+# from .endpoints import chat, document, health # <-- Usar import relativo é mais comum aqui
+# Ou, se preferir absoluto:
+from interface.api.endpoints import chat, document, health # <-- Import absoluto (funciona também)
 
 # Criar roteador principal
 main_router = APIRouter()

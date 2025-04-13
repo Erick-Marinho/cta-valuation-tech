@@ -22,7 +22,7 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 # Importações dos módulos da aplicação
 from config.config import get_settings
-from api.router import main_router
+from interface.api.router import main_router
 # TODO: Refatorar db.schema para usar asyncpg
 # from db.schema import setup_database, is_database_healthy
 
@@ -148,7 +148,7 @@ async def metrics_middleware(request: Request, call_next):
     return response
 
 
-# Incluir rotas da API
+# Incluir rotas da API (agora importa de interface.api)
 app.include_router(main_router)
 
 # Instrumentar a aplicação DEPOIS de incluir as rotas
