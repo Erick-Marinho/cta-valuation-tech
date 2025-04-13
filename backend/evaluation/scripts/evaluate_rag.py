@@ -101,7 +101,7 @@ try:
     from application.use_cases.rag.process_query_use_case import ProcessQueryUseCase
 
     # Wrapper Langchain (para RAGAS)
-    from infrastructure.embedding.langchain_wrappers import (
+    from infrastructure.adapters.langchain.langchain_wrappers import (
         LangChainHuggingFaceEmbeddings,
     )
 

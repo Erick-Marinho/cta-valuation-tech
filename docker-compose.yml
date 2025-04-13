@@ -31,6 +31,7 @@ services:
     volumes:
       - ./backend:/app:delegated
       - ./backend/documents:/app/documents:delegated
+      - nltk_data_volume:/app/nltk_data
     env_file:
       - ./backend/.env
     command: [
@@ -70,6 +71,10 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-vectordb}
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U postgres']
       interval: 5s
@@ -83,8 +88,12 @@ services:
       - '${PGADMIN_PORT:-5050}:80'
     volumes:
       - pgadmin_data:/var/lib/pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@admin.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-pgadmin}
     depends_on:
       - postgres
+    restart: unless-stopped
 
   prometheus:
     image: prom/prometheus:latest
@@ -164,6 +173,28 @@ services:
       retries: 3
       start_period: 10s
 
+  mlflow_server:
+    build: ./mlflow_config
+    container_name: mlflow_server
+    ports:
+      - '5000:5000'
+    volumes:
+      - mlflow_artifacts:/mlflow/artifacts
+    env_file:
+      - ./backend/.env
+    command: >
+      sh -c "
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/mlflow_db
+      --default-artifact-root /mlflow/artifacts
+      "
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   node_modules:
@@ -171,3 +202,5 @@ volumes:
   prometheus_data:
   tempo_data:
   grafana_data:
+  mlflow_artifacts:
+  nltk_data_volume: {}
