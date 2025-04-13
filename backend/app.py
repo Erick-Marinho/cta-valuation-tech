@@ -19,6 +19,9 @@ from infrastructure.metrics.prometheus.metrics_prometheus import (
 from infrastructure.telemetry.opentelemetry import initialize_telemetry
 from infrastructure.logging.config import configure_logging
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+# --- Importar o novo middleware ---
+from interface.middlewares.error_handling_middleware import CustomErrorHandlingMiddleware
+# ---------------------------------
 
 # Importações dos módulos da aplicação
 from config.config import get_settings
@@ -98,12 +101,11 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# Criar app de métricas e inicializar info
-metrics_app = create_metrics_app()
-init_app_info(settings.APP_NAME, settings.APP_VERSION)
-app.mount("/metrics", metrics_app)
+# --- Adicionar Middlewares ---
+# 1. Middleware de Erro (deve vir primeiro ou logo no início)
+app.add_middleware(CustomErrorHandlingMiddleware)
 
-# Configurar CORS
+# 2. Middleware CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
@@ -112,7 +114,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
+# 3. Middleware de Métricas (pode vir depois do CORS e Erro)
 @app.middleware("http")
 async def metrics_middleware(request: Request, call_next):
 

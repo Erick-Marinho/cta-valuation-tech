@@ -46,12 +46,18 @@ class ValidationError(CoreException):
 
 
 class ServiceUnavailableError(CoreException):
-    """Serviço temporariamente indisponível."""
+    """Serviço externo temporariamente indisponível."""
 
     pass
 
 
 class ResourceNotFoundError(CoreException):
     """Recurso não encontrado."""
+
+    pass
+
+
+class DatabaseError(CoreException):
+    """Erro relacionado à interação com o banco de dados."""
 
     pass
