@@ -2,6 +2,7 @@
 Endpoints para gerenciamento de documentos.
 """
 
+import datetime
 from fastapi import (
     APIRouter,
     Depends,
@@ -14,7 +15,7 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import logging
 from domain.aggregates.document.document import Document
 from config.config import get_settings, Settings
@@ -24,6 +25,7 @@ from application.use_cases.document_processing.process_document import ProcessDo
 from application.use_cases.document_processing.get_document_details import GetDocumentDetailsUseCase
 from application.use_cases.document_processing.delete_document import DeleteDocumentUseCase
 from application.dtos.document_dto import DocumentDTO
+from shared.exceptions import ResourceNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +37,7 @@ class DocumentResponse(BaseModel):
     id: int
     name: str
     file_type: Optional[str]
-    upload_date: Optional[str]
+    upload_date: Optional[datetime.datetime]
     size_kb: Optional[float]
     chunks_count: Optional[int]
     processed: Optional[bool]
@@ -82,62 +84,48 @@ async def list_documents(
     """
     Lista documentos disponíveis com filtros, ordenação e paginação.
     """
-    try:
-        limit = params["limit"]
-        offset = params["offset"]
-        sort_by = params["sort_by"]
-        order = params["order"]
+    limit = params["limit"]
+    offset = params["offset"]
+    sort_by = params["sort_by"]
+    order = params["order"]
 
-        document_dtos_page, total_documents = await list_docs_use_case.execute(limit=limit, offset=offset)
+    document_dtos_page, total_documents = await list_docs_use_case.execute(limit=limit, offset=offset)
 
-        if name_filter:
-            filtered_documents_page = [
-                dto for dto in document_dtos_page if name_filter.lower() in dto.name.lower()
-            ]
-        else:
-            filtered_documents_page = document_dtos_page
-
-        reverse_sort = order == "desc"
-        if sort_by == "name":
-            filtered_documents_page.sort(key=lambda x: x.name, reverse=reverse_sort)
-        elif sort_by == "upload_date":
-            filtered_documents_page.sort(key=lambda x: x.upload_date or datetime.datetime.min, reverse=reverse_sort)
-        elif sort_by == "size_kb":
-            filtered_documents_page.sort(key=lambda x: x.size_kb or 0.0, reverse=reverse_sort)
-
-        document_responses = [
-            DocumentResponse(
-                id=dto.id,
-                name=dto.name,
-                file_type=dto.file_type,
-                upload_date=dto.upload_date.isoformat() if dto.upload_date else None,
-                size_kb=dto.size_kb,
-                chunks_count=dto.chunks_count,
-                processed=dto.processed,
-                metadata=dto.metadata,
-            )
-            for dto in filtered_documents_page
+    if name_filter:
+        filtered_documents_page = [
+            dto for dto in document_dtos_page if name_filter.lower() in dto.name.lower()
         ]
+    else:
+        filtered_documents_page = document_dtos_page
 
-        return DocumentListResponse(
-            documents=document_responses,
-            total=total_documents,
-            limit=limit,
-            offset=offset,
-        )
+    reverse_sort = order == "desc"
+    if sort_by == "name":
+        filtered_documents_page.sort(key=lambda x: x.name, reverse=reverse_sort)
+    elif sort_by == "upload_date":
+        filtered_documents_page.sort(key=lambda x: x.upload_date or datetime.datetime.min, reverse=reverse_sort)
+    elif sort_by == "size_kb":
+        filtered_documents_page.sort(key=lambda x: x.size_kb or 0.0, reverse=reverse_sort)
 
-    except RuntimeError as rte:
-         logger.error(f"Erro de configuração/runtime: {rte}")
-         raise HTTPException(
-             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-             detail="Erro de configuração interna ou serviço indisponível."
-         )
-    except Exception as e:
-        logger.exception(f"Erro inesperado ao listar documentos:")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Erro interno ao processar a solicitação de listagem de documentos."
+    document_responses = [
+        DocumentResponse(
+            id=dto.id,
+            name=dto.name,
+            file_type=dto.file_type,
+            upload_date=dto.upload_date,
+            size_kb=dto.size_kb,
+            chunks_count=dto.chunks_count,
+            processed=dto.processed,
+            metadata=dto.metadata,
         )
+        for dto in filtered_documents_page
+    ]
+
+    return DocumentListResponse(
+        documents=document_responses,
+        total=total_documents,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post(
@@ -195,12 +183,6 @@ async def upload_document(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception(f"Erro inesperado durante o upload do arquivo '{file.filename}':")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erro interno inesperado ao processar o documento."
-        )
 
 
 @router.get(
@@ -218,30 +200,23 @@ async def get_document(
         document_dto = await get_details_use_case.execute(document_id)
 
         if document_dto is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Documento com ID {document_id} não encontrado.",
-            )
+            raise ResourceNotFoundError(f"Documento com ID {document_id} não encontrado.")
 
         return DocumentResponse(
             id=document_dto.id,
             name=document_dto.name,
             file_type=document_dto.file_type,
-            upload_date=document_dto.upload_date.isoformat() if document_dto.upload_date else None,
+            upload_date=document_dto.upload_date,
             size_kb=document_dto.size_kb,
             chunks_count=document_dto.chunks_count,
             processed=document_dto.processed,
             metadata=document_dto.metadata,
         )
 
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception(f"Erro inesperado ao buscar documento ID {document_id}:")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erro interno ao buscar detalhes do documento."
-        )
 
 
 @router.delete(
@@ -249,6 +224,7 @@ async def get_document(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(validate_api_key), Depends(verify_db_health)],
     responses={
+        404: {"description": "Documento não encontrado para exclusão"},
         500: {"description": "Erro interno ao tentar excluir o documento"}
     }
 )
@@ -261,19 +237,15 @@ async def delete_document(
         success = await delete_use_case.execute(document_id)
 
         if not success:
-            logger.error(f"O caso de uso DeleteDocumentUseCase retornou False para o ID {document_id}, indicando falha na exclusão.")
+            logger.error(f"Falha não especificada ao excluir documento ID {document_id}.")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Não foi possível excluir o documento devido a um erro interno."
+                detail="Não foi possível excluir o documento devido a um erro interno não especificado."
             )
         # Se success for True, retorna HTTP 204 No Content automaticamente
         return
 
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except HTTPException:
-         raise
-    except Exception as e:
-        logger.exception(f"Erro inesperado ao excluir documento ID {document_id}:")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Erro interno inesperado ao processar a solicitação de exclusão."
-        )
+        raise

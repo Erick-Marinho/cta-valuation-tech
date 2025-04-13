@@ -2,8 +2,8 @@ import logging
 from typing import Dict, Any
 
 # --- Imports de Telemetria ---
-# (Assumindo que utils.telemetry existe e está acessível)
-from utils.telemetry import get_tracer
+# (Import atualizado para infrastructure)
+from infrastructure.telemetry.opentelemetry import get_tracer
 from opentelemetry.trace import Status, StatusCode
 # ------------------------------
 

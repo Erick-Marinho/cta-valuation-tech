@@ -4,20 +4,18 @@ import logging
 from pathlib import Path
 import asyncio
 
-# Adicionar o diretório raiz ao sys.path (PODE SER MANTIDO OU REMOVIDO SE -m FOR USADO)
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")) # Ajustado para subir 2 níveis
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
 
-# Importar APÓS ajustar o path
+# Importar APÓS ajustar o path (ou sem ajuste se removido acima)
 try:
     from config.config import Settings # Só precisamos de Settings aqui
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
     from sqlalchemy.sql import text
     from sqlalchemy import select, func
     from infrastructure.persistence.sqlmodel.models import DocumentoDB # Manteve o caminho relativo a backend/
-    from utils.logging import configure_logging # Necessário se o logger for usado ANTES do main_cli configurar
-    from utils.telemetry import initialize_telemetry, get_tracer # Necessário se o tracer for usado ANTES do main_cli configurar
+    # --- Imports Corrigidos ---
+    from infrastructure.logging.config import configure_logging # <-- Corrigido
+    from infrastructure.telemetry.opentelemetry import initialize_telemetry, get_tracer # <-- Corrigido
+    # --------------------------
     from opentelemetry import trace
     from opentelemetry.trace import Status, StatusCode
 except ImportError as e:

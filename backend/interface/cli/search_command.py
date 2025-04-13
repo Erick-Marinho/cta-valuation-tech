@@ -4,7 +4,7 @@ from typing import Dict, Any
 
 # --- Imports da Nova Estrutura ---
 from config.config import get_settings, Settings
-from utils.telemetry import get_tracer # Assumindo que utils está acessível
+from infrastructure.telemetry.opentelemetry import get_tracer # <-- Corrigido
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 

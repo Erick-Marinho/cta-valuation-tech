@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional, List # Adicionado Optional, List
 # ou PYTHONPATH configurado.
 from config.config import get_settings, Settings
 # from utils.logging import configure_logging # Configuração de logging pode ser centralizada
-from utils.telemetry import initialize_telemetry, get_tracer # Assumindo que utils está acessível
+from infrastructure.telemetry.opentelemetry import get_tracer # <-- Corrigido
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 from utils.filesystem_utils import lista_arquivos
