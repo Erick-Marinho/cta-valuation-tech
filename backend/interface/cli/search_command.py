@@ -29,8 +29,7 @@ from infrastructure.reranking.cross_encoder_reranker import CrossEncoderReRanker
 from infrastructure.llm.providers.nvidia_provider import NvidiaProvider
 
 # Importar Use Cases / Serviços de Aplicação
-# from application.use_cases.document_processing.process_document import ProcessDocumentUseCase # Não usado
-from application.services.rag_service import RAGService
+from application.use_cases.rag.process_query_use_case import ProcessQueryUseCase
 
 # Importar utilitário de cache compartilhado
 from .shared import get_cached_provider
@@ -53,15 +52,15 @@ async def create_dependencies_for_search(settings: Settings, session: AsyncSessi
             # Instanciar repositório
             chunk_repo = SqlModelChunkRepository(session=session)
 
-            # Instanciar o RAG Service
-            rag_service = RAGService(
-                embedding_provider=embedding_provider,
-                llm_provider=llm_provider,
-                chunk_repository=chunk_repo,
-                reranker=reranker
+            # Instanciar o Use Case
+            process_query_uc = ProcessQueryUseCase(
+                 embedding_provider=embedding_provider,
+                 llm_provider=llm_provider,
+                 chunk_repository=chunk_repo,
+                 reranker=reranker
             )
             span.set_status(Status(StatusCode.OK))
-            return {"rag_service": rag_service}
+            return {"process_query_uc": process_query_uc}
         except Exception as e:
             logger.error(f"Erro ao criar dependências de busca: {e}", exc_info=True)
             span.record_exception(e)
@@ -98,7 +97,7 @@ async def testar_busca(settings: Settings, query: str):
                     with tracer.start_as_current_span("cli.create_search_dependencies") as dep_span:
                         try:
                             deps = await create_dependencies_for_search(settings, session)
-                            rag_service: RAGService = deps['rag_service']
+                            process_query_uc: ProcessQueryUseCase = deps['process_query_uc']
                             dep_span.set_status(Status(StatusCode.OK))
                         except Exception as dep_exc:
                             logger.error(f"Erro crítico durante a criação de dependências de busca: {dep_exc}", exc_info=True)
@@ -110,12 +109,12 @@ async def testar_busca(settings: Settings, query: str):
                             raise
 
                     try:
-                        result = await rag_service.process_query(query=query, include_debug_info=True)
+                        result = await process_query_uc.execute(query=query, include_debug_info=True)
                         span.set_attribute("rag.response_received", True)
                         span.set_status(Status(StatusCode.OK))
 
                     except Exception as e:
-                        logger.error(f"Erro ao executar RAGService.process_query: {e}", exc_info=True)
+                        logger.error(f"Erro ao executar process_query_uc.execute: {e}", exc_info=True)
                         result = {"response": f"Erro durante a busca: {e}"}
                         span.record_exception(e)
                         span.set_status(Status(StatusCode.ERROR, "Exception during RAG query"))

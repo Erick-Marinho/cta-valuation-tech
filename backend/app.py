@@ -9,12 +9,15 @@ import asyncpg
 from fastapi import FastAPI, Request
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
-from utils.metrics_prometheus import (
+from infrastructure.metrics.prometheus.metrics_prometheus import (
     HTTP_REQUESTS_TOTAL,
     REQUEST_LATENCY,
     update_system_metrics,
+    create_metrics_app,
+    init_app_info,
 )
-from utils.telemetry import initialize_telemetry
+from infrastructure.telemetry.opentelemetry import initialize_telemetry
+from infrastructure.logging.config import configure_logging
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 # Importações dos módulos da aplicação
@@ -22,8 +25,6 @@ from config.config import get_settings
 from api.router import main_router
 # TODO: Refatorar db.schema para usar asyncpg
 # from db.schema import setup_database, is_database_healthy
-from utils.logging import configure_logging
-from utils.metrics_prometheus import create_metrics_app, init_app_info
 
 # --- Importações SQLAlchemy/SQLModel Async ---
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession

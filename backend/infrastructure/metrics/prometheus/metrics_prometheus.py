@@ -42,6 +42,22 @@ THROUGHPUT = Gauge(
     "Número de requisições por minuto (calculado sobre um período)",  # Descrição ajustada
 )
 
+# --- Adicionar Métricas de Caso de Uso ---
+USE_CASE_CALLS_TOTAL = Counter(
+    "use_case_calls_total",
+    "Total de chamadas a casos de uso",
+    ["use_case", "status"],  # Ex: ProcessQueryUseCase, success/error
+)
+
+USE_CASE_LATENCY_SECONDS = Histogram(
+    "use_case_latency_seconds",
+    "Latência de execução dos casos de uso",
+    ["use_case"],
+    # Buckets adequados para tempo de execução de lógica de aplicação
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
+)
+# -----------------------------------------
+
 # --- MÉTRICAS DE PROCESSAMENTO DE DOCUMENTOS ---
 
 DOCUMENT_PROCESSING_COUNT = Counter(

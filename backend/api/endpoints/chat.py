@@ -5,12 +5,15 @@ Endpoints para conversação e consultas usando RAG.
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from typing import List, Optional, Dict, Any, Annotated
 from pydantic import BaseModel
-from application.services.rag_service import RAGService
-from interface.api.dependencies import get_rag_service
+from application.use_cases.rag.process_query_use_case import ProcessQueryUseCase
+from interface.api.dependencies import get_process_query_use_case
 from config.config import get_settings, Settings
 from shared.exceptions import CoreException
-from utils.metrics_prometheus import record_user_feedback
+from infrastructure.metrics.prometheus.metrics_prometheus import record_user_feedback
+import logging
 
+# Adicionar esta linha para obter o logger
+logger = logging.getLogger(__name__)
 
 # Modelos de dados para requisições e respostas
 class ChatQuery(BaseModel):
@@ -18,6 +21,8 @@ class ChatQuery(BaseModel):
 
     query: str
     document_ids: Optional[List[int]] = None
+    max_results: Optional[int] = None
+    include_debug: bool = False
 
 
 class ChatResponse(BaseModel):
@@ -50,45 +55,43 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 # Dependência para obter o serviço RAG
-RAGServiceDep = Annotated[RAGService, Depends(get_rag_service)]
+ProcessQueryUseCaseDep = Annotated[ProcessQueryUseCase, Depends(get_process_query_use_case)]
 
 
 @router.post("/", response_model=ChatResponse)
-async def process_chat_query(
-    query: ChatQuery,
-    rag_service: RAGServiceDep,
+async def handle_chat_query(
+    request_body: ChatQuery,
+    process_query_uc: ProcessQueryUseCaseDep,
     settings: SettingsDep,
 ):
     """
-    Processa uma consulta do usuário usando o sistema RAG.
-
-    Args:
-        query: Consulta do usuário e opcionalmente IDs de documentos para filtrar
-
-    Returns:
-        ChatResponse: Resposta gerada pelo sistema
+    Recebe uma consulta do usuário e retorna a resposta gerada pelo RAG.
     """
+    logger.info(f"Recebida consulta no endpoint /chat: '{request_body.query[:50]}...'")
     try:
-        # Debug mode ativado nas configurações ou pelo parâmetro debug=true na URL
-        include_debug = settings.DEBUG
-
         # Processar a consulta
-        result = await rag_service.process_query(
-            query=query.query,
-            filtro_documentos=query.document_ids,
-            include_debug_info=include_debug,
+        result_dict = await process_query_uc.execute(
+            query=request_body.query,
+            filtro_documentos=request_body.document_ids,
+            max_results=request_body.max_results,
+            include_debug_info=request_body.include_debug
         )
 
         return ChatResponse(
-            response=result.get("response", "Nenhuma resposta gerada."),
-            processing_time=result.get("processing_time"),
-            debug_info=result.get("debug_info"),
+            response=result_dict.get("response", "Erro: Resposta não encontrada."),
+            processing_time=result_dict.get("processing_time"),
+            debug_info=result_dict.get("debug_info"),
         )
 
-    except CoreException as e:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    except ValueError as ve:
+        logger.error(f"Erro de valor ao processar consulta: {ve}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Erro interno ao processar consulta.")
+        logger.exception(f"Erro inesperado no endpoint /chat:")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro interno ao processar a consulta."
+        )
 
 
 @router.get("/suggested-questions", response_model=List[SuggestedQuestion])

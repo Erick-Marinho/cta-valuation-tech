@@ -9,11 +9,10 @@ from typing import Dict, Any, List, Optional
 from application.interfaces.llm_provider import LLMProvider
 from config.config import get_settings
 from shared.exceptions import LLMServiceError # Manter ou criar uma exceção específica da infra
-from utils.logging import track_timing # Manter se usado
-from utils.telemetry import get_tracer
+from infrastructure.telemetry.opentelemetry import get_tracer
+from infrastructure.metrics.prometheus.metrics_prometheus import record_llm_time, record_tokens, record_llm_error
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
-from utils.metrics_prometheus import record_llm_time, record_tokens, record_llm_error
 
 # Usar cliente OpenAI para API NVIDIA
 from openai import OpenAI, AsyncOpenAI # AsyncOpenAI pode ser usado diretamente se suportado pela API NVIDIA

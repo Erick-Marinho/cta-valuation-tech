@@ -96,7 +96,9 @@ try:
     from infrastructure.reranking.cross_encoder_reranker import CrossEncoderReRanker
 
     # Classe do Serviço de Aplicação
-    from application.services.rag_service import RAGService
+    # from application.services.rag_service import RAGService
+    # Importar o Caso de Uso
+    from application.use_cases.rag.process_query_use_case import ProcessQueryUseCase
 
     # Wrapper Langchain (para RAGAS)
     from infrastructure.embedding.langchain_wrappers import (
@@ -147,9 +149,9 @@ def get_library_version(library_name: str) -> str:
 
 
 # --- Implementação de prepare_evaluation_data ---
-async def prepare_evaluation_data(rag_service: RAGService) -> Dataset:
+async def prepare_evaluation_data(process_query_uc: ProcessQueryUseCase) -> Dataset:
     """
-    Prepara os dados para avaliação chamando o RAGService para cada pergunta
+    Prepara os dados para avaliação chamando o ProcessQueryUseCase para cada pergunta
     no dataset de avaliação e coletando os resultados.
     """
     processed_data = []
@@ -171,16 +173,16 @@ async def prepare_evaluation_data(rag_service: RAGService) -> Dataset:
 
         logger.info(f"Processando item {i+1}/{total_items}: '{question[:60]}...'")
 
-        answer = "ERRO: Falha na execução do RAGService"
-        contexts = [] # Lista de strings dos contextos recuperados/usados
+        answer = "ERRO: Falha na execução do ProcessQueryUseCase"
+        contexts = []
 
         try:
             start_query_time = asyncio.get_event_loop().time()
-            result = await rag_service.process_query(
+            result = await process_query_uc.execute(
                 query=question, include_debug_info=True
             )
             query_duration = asyncio.get_event_loop().time() - start_query_time
-            logger.info(f"Item {i+1} processado pelo RAGService em {query_duration:.2f}s.")
+            logger.info(f"Item {i+1} processado pelo ProcessQueryUseCase em {query_duration:.2f}s.")
 
             answer = result.get("response", "")
             debug_info = result.get("debug_info", {})
@@ -205,7 +207,7 @@ async def prepare_evaluation_data(rag_service: RAGService) -> Dataset:
             else:
                 # Se 'text_content' não estiver disponível ou a estrutura for inesperada, logar e usar placeholders
                 logger.warning(
-                    f"Não foi possível extrair 'text_content' de final_chunk_details para item {i+1} ('{question[:30]}...'). Verifique o debug_info do RAGService. Usando placeholders."
+                    f"Não foi possível extrair 'text_content' de final_chunk_details para item {i+1} ('{question[:30]}...'). Verifique o debug_info do ProcessQueryUseCase. Usando placeholders."
                 )
                 # Criar placeholders baseados no número de chunks reportados (se disponível)
                 num_results = debug_info.get("num_results", len(final_chunk_details))
@@ -228,7 +230,7 @@ async def prepare_evaluation_data(rag_service: RAGService) -> Dataset:
                 )
 
         except Exception as e:
-            logger.error(f"Erro ao processar item {i+1} ('{question[:60]}...') com RAGService: {e}", exc_info=True)
+            logger.error(f"Erro ao processar item {i+1} ('{question[:60]}...') com ProcessQueryUseCase: {e}", exc_info=True)
             answer = f"ERRO: {type(e).__name__}"
             contexts = []
 
@@ -303,7 +305,7 @@ async def run_evaluation(
                     "reranker_model": settings.RERANKER_MODEL,
                     "chunk_size": settings.CHUNK_SIZE,
                     "chunk_overlap": settings.CHUNK_OVERLAP,
-                    "top_k_retriever": "N/A (ver RAGService)",
+                    "top_k_retriever": "N/A (ver ProcessQueryUseCase)",
                     "dataset_size": len(ragas_dataset),
                     "deepeval_version": get_library_version("deepeval"),
                     "ragas_version": get_library_version("ragas"),
@@ -583,7 +585,7 @@ async def main():
     reranker: Optional[CrossEncoderReRanker] = None
     langchain_embedding_wrapper: Optional[LangChainHuggingFaceEmbeddings] = None
     async_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
-    rag_service: Optional[RAGService] = None
+    process_query_uc: Optional[ProcessQueryUseCase] = None
 
     try:
         # 1. Carregar Configurações
@@ -674,26 +676,28 @@ async def main():
                 ) from repo_exc
             logger.info("Repositório Chunk instanciado.")
 
-            # 8. Instanciar RAGService
-            logger.info("Instanciando RAGService...")
+            # 8. Instanciar ProcessQueryUseCase em vez de RAGService
+            logger.info("Instanciando ProcessQueryUseCase...")
             try:
                 if not all([embedding_provider, llm_provider, chunk_repo, reranker]):
                     raise ValueError("Dependência nula.")
-                rag_service = RAGService(
+                process_query_uc = ProcessQueryUseCase(
                     embedding_provider=embedding_provider,
                     llm_provider=llm_provider,
                     chunk_repository=chunk_repo,
                     reranker=reranker,
                 )
-            except Exception as service_exc:
+            except Exception as uc_exc:
                 raise RuntimeError(
-                    f"Falha ao instanciar RAGService: {service_exc}"
-                ) from service_exc
-            logger.info("RAGService instanciado.")
+                    f"Falha ao instanciar ProcessQueryUseCase: {uc_exc}"
+                ) from uc_exc
+            logger.info("ProcessQueryUseCase instanciado.")
 
-            # 9. Preparar Dados
+            # 9. Preparar Dados (Passar o Use Case)
             logger.info("Preparando dados para avaliação...")
-            prepared_hf_dataset = await prepare_evaluation_data(rag_service)
+            if not process_query_uc:
+                 raise ValueError("ProcessQueryUseCase não foi instanciado.")
+            prepared_hf_dataset = await prepare_evaluation_data(process_query_uc)
 
             # 10. Executar Avaliação
             if prepared_hf_dataset and len(prepared_hf_dataset) > 0:

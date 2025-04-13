@@ -12,10 +12,12 @@ from config.config import get_settings # Para obter configurações, como nome d
 from sentence_transformers import CrossEncoder
 
 # Telemetria/Métricas (Opcional, mas recomendado)
-from utils.telemetry import get_tracer
+# from utils.telemetry import get_tracer # <-- Linha antiga comentada/removida
+from infrastructure.telemetry.opentelemetry import get_tracer # <-- Linha corrigida
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind
-# from utils.metrics_prometheus import record_rerank_time
+# from utils.metrics_prometheus import record_rerank_time # <-- Manter comentado ou corrigir se for usar
+# from infrastructure.metrics.prometheus.metrics_prometheus import record_rerank_time # Exemplo de correção se for usar
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +100,7 @@ class CrossEncoderReRanker(ReRanker):
 
                 predict_time = time.time() - start_predict
                 span.set_attribute("reranker.predict_time_ms", int(predict_time * 1000))
-                # record_rerank_time(predict_time) # Adicionar métrica se existir
+                # record_rerank_time(predict_time) # Adicionar métrica se existir (e se import foi corrigido/descomentado)
 
                 if len(scores) != len(chunks):
                      logger.error(f"Número de scores ({len(scores)}) diferente do número de chunks ({len(chunks)})!")

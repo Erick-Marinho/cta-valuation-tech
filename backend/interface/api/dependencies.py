@@ -33,12 +33,12 @@ from infrastructure.processors.chunkers.sentence_chunker import SentenceChunker
 from infrastructure.external_services.embedding.huggingface_embedding_provider import HuggingFaceEmbeddingProvider
 from infrastructure.llm.providers.nvidia_provider import NvidiaProvider
 
-# Importar o serviço refatorado
-from application.services.rag_service import RAGService
-
 # Importar interfaces e implementações de re-ranking
 from application.interfaces.reranker import ReRanker
 from infrastructure.reranking.cross_encoder_reranker import CrossEncoderReRanker
+
+# Importar Caso de Uso
+from application.use_cases.rag.process_query_use_case import ProcessQueryUseCase
 
 logger = logging.getLogger(__name__)
 
@@ -156,32 +156,23 @@ def get_reranker() -> ReRanker:
         logger.critical(f"FALHA CRÍTICA ao inicializar ReRanker: {e}", exc_info=True)
         raise RuntimeError(f"Não foi possível inicializar o ReRanker: {e}") from e
 
-# --- Provedor para o Serviço de Aplicação RAG (MODIFICADO) ---
-def get_rag_service(
+# --- NOVO: Provedor para ProcessQueryUseCase ---
+def get_process_query_use_case(
+    # Injetar as mesmas dependências que RAGService precisava
     embedding_provider: Annotated[EmbeddingProvider, Depends(get_embedding_provider)],
     llm_provider: Annotated[LLMProvider, Depends(get_llm_provider)],
     chunk_repo: Annotated[ChunkRepository, Depends(get_chunk_repository)],
-    reranker: Annotated[ReRanker, Depends(get_reranker)], # <-- Injetar ReRanker
-) -> RAGService:
-    """ Fornece a instância do serviço de aplicação RAG. """
-    return RAGService(
+    reranker: Annotated[ReRanker, Depends(get_reranker)],
+) -> ProcessQueryUseCase:
+    """ Fornece a instância do caso de uso ProcessQueryUseCase. """
+    logger.debug("Criando instância de ProcessQueryUseCase...") # Log opcional
+    return ProcessQueryUseCase(
         embedding_provider=embedding_provider,
         llm_provider=llm_provider,
         chunk_repository=chunk_repo,
-        reranker=reranker, # <-- Passar reranker para o construtor
+        reranker=reranker,
     )
-
-# --- Provedores de Casos de Uso ---
-# Se algum endpoint da API precisar chamar o RAGService diretamente,
-# ele pode depender de get_rag_service.
-# Ex: em api/endpoints/chat.py:
-# @router.post("/query")
-# async def process_chat_query(
-#     request: ChatRequest,
-#     rag_service: Annotated[RAGService, Depends(get_rag_service)]
-# ):
-#     result = await rag_service.process_query(request.query)
-#     return result
+# --------------------------------------------
 
 # --- Parâmetros Comuns de Consulta (sem alterações) ---
 async def common_query_parameters(

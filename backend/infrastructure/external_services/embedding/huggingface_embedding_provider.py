@@ -9,8 +9,8 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from config.config import get_settings
 from infrastructure.processors.normalizers.text_normalizer import clean_text_for_embedding
 from opentelemetry import trace
-from utils.telemetry import get_tracer
-from utils.metrics_prometheus import (
+from infrastructure.telemetry.opentelemetry import get_tracer
+from infrastructure.metrics.prometheus.metrics_prometheus import (
     record_embedding_time,
     update_embedding_cache_metrics,
 )
