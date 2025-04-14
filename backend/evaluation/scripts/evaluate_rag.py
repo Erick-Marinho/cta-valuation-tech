@@ -349,14 +349,28 @@ async def run_evaluation(
 
                 # Após executar ragas_evaluate e receber o resultado
                 if ragas_result:
-                    # Primeiro, tente extrair as métricas usando os métodos da API
                     try:
-                        # Converter para DataFrame para visualização
+                        # Converter para DataFrame
                         ragas_df = ragas_result.to_pandas()
                         print("\n--- Scores RAGAS Detalhados ---")
-                        print(ragas_df.head()) # Mostrar apenas o início
+                        print(ragas_df.head())
                         print("-------------------------------\n")
-                        
+
+                        # 1. Definir caminho LOCAL diretamente em /app (gravável)
+                        local_results_path = "/app/ragas_detailed_results.csv"
+
+                        # 2. Definir um SUBDIRETÓRIO de destino no servidor MLflow
+                        remote_artifact_subdir = "evaluation_artifacts"
+
+                        # 3. Salva o CSV no caminho local
+                        ragas_df.to_csv(local_results_path, index=False)
+                        logger.info(f"Arquivo de resultados salvo localmente em: {local_results_path}")
+
+                        # 4. Loga o artefato especificando o caminho LOCAL
+                        #    e o SUBDIRETÓRIO REMOTO (artifact_path)
+                        mlflow.log_artifact(local_results_path, artifact_path=remote_artifact_subdir)
+                        logger.info(f"Resultados detalhados logados como artefato no servidor em: {remote_artifact_subdir}/ragas_detailed_results.csv")
+
                         # Extrair média de cada métrica para logging no MLflow
                         metric_means = {}
                         for metric in ragas_metrics_to_run:
@@ -373,14 +387,10 @@ async def run_evaluation(
                                 mlflow.log_metric(f"ragas_{metric_name}", mean_value)
                                 print(f"Logged {metric_name}: {mean_value}")
 
-                        # Salvar resultados detalhados como artefato
-                        results_filename = "ragas_detailed_results.csv"
-                        ragas_df.to_csv(results_filename, index=False)
-                        mlflow.log_artifact(results_filename)
-                        logger.info(f"Resultados detalhados salvos e logados como artefato: {results_filename}")
-                    
                     except Exception as e:
                         logger.error(f"Erro ao processar ou salvar resultados RAGAS: {e}", exc_info=True)
+                else:
+                     logger.warning("Nenhum resultado retornado pela avaliação RAGAS.")
 
             except Exception as e:
                 logger.error(
