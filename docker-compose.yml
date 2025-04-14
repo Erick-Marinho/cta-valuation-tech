@@ -34,7 +34,8 @@ services:
       - nltk_data_volume:/app/nltk_data
     env_file:
       - ./backend/.env
-    command: [
+    command:
+      [
         'uvicorn',
         'app:app',
         '--host',
@@ -43,13 +44,13 @@ services:
         '8000',
         '--reload',
         '--reload-dir',
-        '/app', # Diretório a ser monitorado
+        '/app',
         '--reload-delay',
-        '0.1', # Delay entre reloads
+        '0.1',
       ]
     environment:
-      - WATCHFILES_FORCE_POLLING=true # Força o polling em sistemas que não suportam inotify
-      - WATCHFILES_POLL_INTERVAL=0.1 # Intervalo de polling em segundos
+      - WATCHFILES_FORCE_POLLING=true
+      - WATCHFILES_POLL_INTERVAL=0.1
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
     depends_on:
       postgres:
@@ -188,7 +189,7 @@ services:
       --host 0.0.0.0
       --port 5000
       --backend-store-uri postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/mlflow_db
-      --default-artifact-root /mlflow/artifacts
+      --default-artifact-root artifacts
       "
     depends_on:
       postgres:
