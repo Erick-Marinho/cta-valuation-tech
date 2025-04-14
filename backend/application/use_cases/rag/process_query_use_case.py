@@ -304,7 +304,8 @@ class ProcessQueryUseCase:
                     "retrieved_rrf_scores": final_rrf_scores,
                     "context_used_length": len(context),
                     "context_used_tokens": context_tokens,
-                    "final_chunk_details": final_chunk_details_list
+                    "final_chunk_details": final_chunk_details_list,
+                    "initial_search_limit": initial_search_limit
                 }
                 result["debug_info"] = debug_info # Adiciona a chave ao dict result
                 # --- Fim do Bloco ---

@@ -237,11 +237,13 @@ async def prepare_evaluation_data(process_query_uc: ProcessQueryUseCase) -> Data
         # Adiciona o ponto de dados para o dataset RAGAS/DeepEval
         processed_data.append(
             {
+                "query_id": i + 1,
                 "question": question,
                 "answer": answer,
                 "contexts": contexts, # Lista simplificada
                 "ground_truth": ground_truth_answer,
                 "ground_truths": ground_truth_contexts,
+                "initial_search_limit": result.get("debug_info", {}).get("initial_search_limit", -1) if 'result' in locals() else -1
             }
         )
 
@@ -301,11 +303,10 @@ async def run_evaluation(
                 params_to_log = {
                     "llm_model_rag": settings.LLM_MODEL,
                     "embedding_model_rag": settings.EMBEDDING_MODEL,
-                    "vector_search_weight": settings.VECTOR_SEARCH_WEIGHT,
                     "reranker_model": settings.RERANKER_MODEL,
                     "chunk_size": settings.CHUNK_SIZE,
                     "chunk_overlap": settings.CHUNK_OVERLAP,
-                    "top_k_retriever": "N/A (ver ProcessQueryUseCase)",
+                    "final_context_limit": settings.MAX_RESULTS,
                     "dataset_size": len(ragas_dataset),
                     "deepeval_version": get_library_version("deepeval"),
                     "ragas_version": get_library_version("ragas"),
@@ -353,7 +354,7 @@ async def run_evaluation(
                         # Converter para DataFrame para visualização
                         ragas_df = ragas_result.to_pandas()
                         print("\n--- Scores RAGAS Detalhados ---")
-                        print(ragas_df)
+                        print(ragas_df.head()) # Mostrar apenas o início
                         print("-------------------------------\n")
                         
                         # Extrair média de cada métrica para logging no MLflow
@@ -371,9 +372,15 @@ async def run_evaluation(
                             if not pd.isna(mean_value):  # Verificar se não é NaN
                                 mlflow.log_metric(f"ragas_{metric_name}", mean_value)
                                 print(f"Logged {metric_name}: {mean_value}")
+
+                        # Salvar resultados detalhados como artefato
+                        results_filename = "ragas_detailed_results.csv"
+                        ragas_df.to_csv(results_filename, index=False)
+                        mlflow.log_artifact(results_filename)
+                        logger.info(f"Resultados detalhados salvos e logados como artefato: {results_filename}")
                     
                     except Exception as e:
-                        logger.error(f"Erro ao processar resultados RAGAS: {e}", exc_info=True)
+                        logger.error(f"Erro ao processar ou salvar resultados RAGAS: {e}", exc_info=True)
 
             except Exception as e:
                 logger.error(

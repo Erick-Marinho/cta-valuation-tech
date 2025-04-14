@@ -116,6 +116,9 @@ async def migrar_documentos(settings: Settings, dir_documentos: str):
             logger.info(f"Iniciando migração de documentos da pasta: {dir_documentos}")
 
             try:
+                # --- ADICIONAR PRINT PARA DEBUG ---
+                print(f"DEBUG: Tentando criar engine com URL: {settings.DATABASE_URL}")
+                # ---------------------------------
                 engine = create_async_engine(settings.DATABASE_URL, echo=False)
                 AsyncSessionFactory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
                 logger.info("Engine e SessionFactory criados para migração.")

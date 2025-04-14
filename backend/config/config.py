@@ -59,9 +59,6 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list = ["*"]
 
     # RAG
-    VECTOR_SEARCH_WEIGHT: float = 0.7  # Peso da busca vetorial vs. textual
-    TEXT_SEARCH_WEIGHT: float = 0.3  # Complemento do peso vetorial
-    SEARCH_THRESHOLD: float = 0.5  # Limiar mínimo de similaridade
     MAX_RESULTS: int = 4
     RAG_SYSTEM_PROMPT: str = Field(
         default="""Você é um assistente prestativo. Use o contexto fornecido para responder à pergunta do usuário. Responda em português brasileiro.""",

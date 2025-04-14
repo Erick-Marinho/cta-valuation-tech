@@ -17,7 +17,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
     WATCHFILES_FORCE_POLLING=true \
     WATCHFILES_POLL_INTERVAL=0.1 \
-    NLTK_DATA=/app/nltk_data
+    NLTK_DATA=/app/nltk_data \
+    EMBEDDING_MODEL=intfloat/multilingual-e5-large-instruct
 
 # Criar usuário não privilegiado ANTES de precisar dele para permissões
 RUN useradd -m -u 1000 appuser
@@ -27,6 +28,12 @@ COPY requirements.txt .
 
 # Instalar dependências Python (nltk será instalado aqui)
 RUN pip install --no-cache-dir --pre -r requirements.txt
+
+# --- ADICIONAR PRÉ-DOWNLOAD DO MODELO ---
+# Executar como root para que o cache padrão (~/.cache) seja utilizável
+# e fique na imagem.
+RUN python -c "from sentence_transformers import SentenceTransformer; print('Downloading embedding model...'); SentenceTransformer('${EMBEDDING_MODEL:-intfloat/multilingual-e5-large-instruct}'); print('Embedding model downloaded.')"
+# ---------------------------------------
 
 # Criar diretório para arquivos processados
 RUN mkdir -p /app/documents && chown appuser:appuser /app/documents
